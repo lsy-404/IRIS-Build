@@ -5,9 +5,4 @@
 
 | 编号 | 任务名称 | 任务描述 | 变更动机 | 状态 |
 | :--: | :------: | :------: | :------: | :--: |
-| 001 | [CI] 统一签名 secrets | 将平台特定签名 secrets 统一为通用命名并验证 workflow | Windows/macOS 共用同一签名输入 | ✅ 已完成 |
-| 002 | [CI] macOS 临时根信任 | 在 macOS runner 构建前安装并清理公开签名根 | 防止 custom signer 的钥匙串授权阻塞安装包构建 | ✅ 已完成 |
-| 003 | [CI] 失败构建诊断产物 | 在签名校验失败时保留已生成的 staged installers 供诊断 | 允许定位真实发布构建失败，同时禁止失败产物进入发布 job | ✅ 已完成 |
-| 004 | [CI] PRO 包发布 | 为 Core 与 Shell 发布路径接入私有 PRO 包构建和上传 | 让受控 PRO 扩展随兼容的发布版本可用 | 🔄 进行中 |
-| 005 | [CI] legacy 签名桥接 | 用固定旧源提交的签名材料构建旧 shell | 用户决定统一回归既有 P12，迁移方案废弃 | ❌ 已废弃 |
-| 006 | [CI] 统一回归旧签名身份 | Windows 与 macOS 固定使用既有统一 P12，并只信任旧公开根 | 消除迁移阶段和新增 secret，使发布身份保持一致 | 🔄 进行中 |
+| 001 | [Maintenance] Actions storage cleanup | 清理历史 Actions artifact，并在成功发布后回收临时 artifact | GitHub Pro Actions artifact 存储接近配额 | 🔄 进行中 |

@@ -378,6 +378,7 @@ jobs:
     needs: [shell-check, shell-build]
     runs-on: ubuntu-latest
     permissions:
+      actions: write
       contents: write
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
@@ -454,6 +455,15 @@ jobs:
           actual="$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/latest" --jq '[.assets[].name] | sort | join(",")')"
           [[ "$actual" == "$expected" ]]
           test "$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/latest" --jq '[.assets[] | select(.state != "uploaded")] | length')" = 0
+      - name: Delete transient build artifacts
+        if: success()
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api --paginate "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/artifacts?per_page=100" --jq '.artifacts[].id' | while IFS= read -r artifact_id; do
+            gh api --method DELETE "repos/$GITHUB_REPOSITORY/actions/artifacts/$artifact_id"
+          done
       - name: Wipe shell-release workspace
         if: always()
         run: rm -rf "$RUNNER_TEMP/iris-release-key" "$RUNNER_TEMP/iris-release-envelope" "$RUNNER_TEMP/iris-signing.p12" iris-source tag-source staged-installers release-assets build
