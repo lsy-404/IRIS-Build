@@ -10,3 +10,4 @@
 - 2026-09-11：工作流修复提交 `0486cba` 已快进合并并推送到 `main`。
 - 2026-09-11：删除 `IRIS-Build` 130 个及 `IRIS` 64 个历史 Actions artifact；两仓库 API 复核均为 0 个 artifact。
 - 2026-09-11：复核 `IRIS-Build/latest` Release 仍有 12 个资产；账号其余仓库当前 artifact 合计约 148,705,389 bytes（0.138 GiB）。
+- 2026-09-11：尝试读取 Packages 共享存储时收到 `read:packages` scope 不足；保持凭据权限不变，并将该限制记录下来。

@@ -21,3 +21,4 @@ GitHub Pro 账号 `lsy-404` 的 Actions artifact 存储接近配额。`IRIS-Buil
 
 - 首次 `git add agents` 被仓库 `.gitignore` 忽略；审计记录仍保留在本地 `/agents`，提交时需显式强制加入该目录。
 - 首轮批量删除在达到执行时限前完成了 `IRIS-Build` 的清理，但 `IRIS` 仍有 46 个 artifact；随后对剩余条目单独重试，最终清理成功。
+- 只读查询 Packages 时，当前 GitHub CLI token 缺少 `read:packages` scope；未扩大 token 权限，Packages 共享池占用无法从 CLI 单独核实。
