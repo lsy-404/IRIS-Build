@@ -7,3 +7,6 @@
 - 2026-09-11：确认 `latest` Release 已包含当前构建的成品资产，作为长期保留位置。
 - 2026-09-11：在 `shell-release` 成功发布后增加 artifact 回收步骤，并授予该 job `actions: write` 权限。
 - 2026-09-11：`git diff --check` 与 Ruby YAML 解析通过；本机未安装 `actionlint`。
+- 2026-09-11：工作流修复提交 `0486cba` 已快进合并并推送到 `main`。
+- 2026-09-11：删除 `IRIS-Build` 130 个及 `IRIS` 64 个历史 Actions artifact；两仓库 API 复核均为 0 个 artifact。
+- 2026-09-11：复核 `IRIS-Build/latest` Release 仍有 12 个资产；账号其余仓库当前 artifact 合计约 148,705,389 bytes（0.138 GiB）。
