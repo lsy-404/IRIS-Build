@@ -80,7 +80,7 @@ jobs:
           package-manager-cache: false
       - name: Install pnpm
         run: |
-          npm install --global corepack@0.34.1
+          npm install --global --force corepack@0.34.1
           corepack enable pnpm
           corepack prepare pnpm@10.34.6 --activate
       - name: Install dependencies
@@ -255,7 +255,7 @@ jobs:
           package-manager-cache: false
       - name: Install pnpm
         run: |
-          npm install --global corepack@0.34.1
+          npm install --global --force corepack@0.34.1
           corepack enable pnpm
           corepack prepare pnpm@10.34.6 --activate
       - name: Prepare release and core payload
@@ -354,7 +354,7 @@ jobs:
           package-manager-cache: false
       - name: Install pnpm
         run: |
-          npm install --global corepack@0.34.1
+          npm install --global --force corepack@0.34.1
           corepack enable pnpm
           corepack prepare pnpm@10.34.6 --activate
       - name: Build installer
@@ -422,7 +422,7 @@ jobs:
           package-manager-cache: false
       - name: Install pnpm
         run: |
-          npm install --global corepack@0.34.1
+          npm install --global --force corepack@0.34.1
           corepack enable pnpm
           corepack prepare pnpm@10.34.6 --activate
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
