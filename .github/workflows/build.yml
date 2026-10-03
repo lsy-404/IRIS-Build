@@ -359,6 +359,7 @@ jobs:
           corepack prepare pnpm@10.34.6 --activate
       - name: Build installer
         env:
+          npm_config_node_gyp: ${{ github.workspace }}/node_modules/node-gyp/bin/node-gyp.js
           IRIS_SHELL_VERSION: ${{ needs.shell-check.outputs.shell_version }}
           IRIS_RELEASE_KEY_TRANSFER_KEY: ${{ secrets.IRIS_RELEASE_KEY_TRANSFER_KEY }}
           IRIS_RELEASE_KEY_ENVELOPE: ${{ needs.shell-check.outputs.release_envelope }}
