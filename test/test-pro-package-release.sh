@@ -40,8 +40,8 @@ ruby -r yaml -e '
     static = index_of(entries, "Run release static contract check")
     behavior = index_of(entries, "Run release behavior gate")
     raise "static contract check must run before behavior gate" unless static < behavior
-    raise "static suite is not executed" unless entries.fetch(static).fetch("run").include?("npm run test:release-static")
-    raise "behavior suite is not executed" unless entries.fetch(behavior).fetch("run").include?("npm run test:release-behavior")
+    raise "static suite is not executed" unless entries.fetch(static).fetch("run").include?("pnpm run test:release-static")
+    raise "behavior suite is not executed" unless entries.fetch(behavior).fetch("run").include?("pnpm run test:release-behavior")
   end
 
   shell_check_steps = steps(shell_check)

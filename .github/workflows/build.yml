@@ -73,6 +73,9 @@ jobs:
             [[ "$entry" == "iris-source/.git" ]] && continue
             cp -R "$entry" ./
           done
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.34.6
       - name: Setup Node.js
         uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
         with:
@@ -135,17 +138,17 @@ jobs:
         env:
           WORKFLOW_REPORT_TOKEN: ${{ secrets.IRIS_RELEASE_UPLOAD_TOKEN }}
         run: |
-          node .github/scripts/run-quiet.mjs -- bash -c 'npm run typecheck:renderer && npm run build:main'
+          node .github/scripts/run-quiet.mjs -- bash -c 'pnpm run typecheck:renderer && pnpm run build:main'
       - name: Run release static contract check
         if: steps.gate.outputs.shell_build != 'true'
         env:
           WORKFLOW_REPORT_TOKEN: ${{ secrets.IRIS_RELEASE_UPLOAD_TOKEN }}
-        run: node .github/scripts/run-quiet.mjs -- npm run test:release-static
+        run: node .github/scripts/run-quiet.mjs -- pnpm run test:release-static
       - name: Run release behavior gate
         if: steps.gate.outputs.shell_build != 'true'
         env:
           WORKFLOW_REPORT_TOKEN: ${{ secrets.IRIS_RELEASE_UPLOAD_TOKEN }}
-        run: node .github/scripts/run-quiet.mjs -- xvfb-run -a npm run test:release-behavior
+        run: node .github/scripts/run-quiet.mjs -- xvfb-run -a pnpm run test:release-behavior
       - name: Generate core release key
         if: steps.gate.outputs.shell_build != 'true'
         env:
@@ -243,6 +246,9 @@ jobs:
             [[ "$entry" == "iris-source/.git" ]] && continue
             cp -R "$entry" ./
           done
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.34.6
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
         with:
           node-version: 20
@@ -261,15 +267,15 @@ jobs:
           node .github/scripts/run-quiet.mjs -- bash .github/scripts/release-step.sh metadata
           node .github/scripts/run-quiet.mjs -- bash .github/scripts/release-step.sh shell-fingerprint
           node .github/scripts/run-quiet.mjs -- bash .github/scripts/release-step.sh core-build-number
-          node .github/scripts/run-quiet.mjs -- bash -c 'npm run typecheck:renderer && npm run build:main'
+          node .github/scripts/run-quiet.mjs -- bash -c 'pnpm run typecheck:renderer && pnpm run build:main'
       - name: Run release static contract check
         env:
           WORKFLOW_REPORT_TOKEN: ${{ secrets.IRIS_RELEASE_UPLOAD_TOKEN }}
-        run: node .github/scripts/run-quiet.mjs -- npm run test:release-static
+        run: node .github/scripts/run-quiet.mjs -- pnpm run test:release-static
       - name: Run release behavior gate
         env:
           WORKFLOW_REPORT_TOKEN: ${{ secrets.IRIS_RELEASE_UPLOAD_TOKEN }}
-        run: node .github/scripts/run-quiet.mjs -- xvfb-run -a npm run test:release-behavior
+        run: node .github/scripts/run-quiet.mjs -- xvfb-run -a pnpm run test:release-behavior
       - name: Generate release key
         id: key
         env:
@@ -312,11 +318,11 @@ jobs:
       matrix:
         include:
           - os: windows-latest
-            dist_cmd: npm run dist:win -- --publish never
+            dist_cmd: pnpm run dist:win --publish never
           - os: macos-latest
-            dist_cmd: npm run dist:mac -- --publish never
+            dist_cmd: pnpm run dist:mac --publish never
           - os: ubuntu-latest
-            dist_cmd: npm run dist:linux -- --publish never
+            dist_cmd: pnpm run dist:linux --publish never
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
@@ -336,6 +342,9 @@ jobs:
             [[ "$entry" == "iris-source/.git" ]] && continue
             cp -R "$entry" ./
           done
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.34.6
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
         with:
           node-version: 20
@@ -398,6 +407,9 @@ jobs:
             cp -R "$entry" ./
           done
           rm -rf certificates
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.34.6
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
         with:
           node-version: 20
