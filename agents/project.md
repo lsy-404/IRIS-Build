@@ -1,5 +1,5 @@
 # IRIS-Build 项目索引
-> 最后更新：2026-09-11
+> 最后更新：2026-10-09
 
 ## 项目目标
 
@@ -8,7 +8,7 @@
 ## 技术栈
 
 - GitHub Actions
-- Node.js 20
+- Node.js 24
 - Electron 多平台打包
 - GitHub Releases 与外部 license service 发布流程
 

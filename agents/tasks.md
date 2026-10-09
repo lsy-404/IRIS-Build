@@ -1,5 +1,5 @@
 # IRIS-Build 任务追踪
-> 准则版本: v0.2.2
+> 准则版本: v0.2.3
 
 ## 任务列表
 
@@ -8,3 +8,4 @@
 | 001 | [Maintenance] Actions storage cleanup | 清理历史 Actions artifact，并在成功发布后回收临时 artifact | GitHub Pro Actions artifact 存储接近配额 | ✅ 已完成 |
 
 | 007 | [Refactor] pnpm迁移 | 源码依赖安装和 CI 使用 pnpm | 用户要求自有仓库全部替换 | 🔄 进行中 |
+| 008 | [CI] 发布运行时统一 | 统一发布运行时并核对安装包发布 | Node 20 已不被现有检查工具支持 | 🔄 进行中 |
