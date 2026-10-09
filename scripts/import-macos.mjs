@@ -298,6 +298,7 @@ async function submit() {
   const body = {
     project_id: `import-${product}`,
     platform: 'macos',
+    execution_visibility: 'public',
     run_id: Number(runId),
     run_attempt: 1,
     artifact_id: Number(artifactId),
