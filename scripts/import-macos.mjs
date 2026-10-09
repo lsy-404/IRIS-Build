@@ -52,6 +52,8 @@ const products = Object.freeze({
     sourceTag: 'v0.4.1',
     sourceSha: 'f4bc64ec4b13e21e89d0a5ed8bd7708cac004209',
     architecture: 'arm64',
+    appName: 'Epilogue.app',
+    bundleId: 'com.electron.epilogue',
   },
 });
 
@@ -66,7 +68,7 @@ function productConfig(product) {
 }
 
 function run(file, args) {
-  const result = spawnSync(file, args, { stdio: 'ignore', timeout: 120_000 });
+  const result = spawnSync(file, args, { stdio: 'ignore', timeout: 120_000, env: { ...process.env, COPYFILE_DISABLE: '1' } });
   if (result.error || result.status !== 0) throw new ImportError('IMPORT_COMMAND_FAILED');
 }
 
@@ -193,7 +195,7 @@ function readBundleId(appPath) {
 }
 
 function mountDiskImage(dmgPath, mountPath) {
-  run('/usr/bin/hdiutil', ['attach', '-readonly', '-nobrowse', '-mountpoint', mountPath, dmgPath]);
+  run('/usr/bin/hdiutil', ['attach', '-readonly', '-nobrowse', '-noautoopen', '-mountpoint', mountPath, dmgPath]);
 }
 
 async function detachDiskImage(mountPath) {
@@ -261,7 +263,7 @@ async function prepare() {
     if (mounted) {
       try { await detachDiskImage(mountPath); } catch { detachFailed = true; }
     }
-    await rm(workDir, { recursive: true, force: true });
+    if (!detachFailed) await rm(workDir, { recursive: true, force: true });
     if (detachFailed) throw new ImportError('DISK_IMAGE_DETACH_FAILED');
     throw error;
   }
