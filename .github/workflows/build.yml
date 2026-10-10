@@ -40,6 +40,7 @@ defaults:
 jobs:
   core:
     permissions:
+      actions: read
       contents: write
     if: (github.event_name == 'repository_dispatch' && github.event.action == 'iris-build' && github.event.client_payload.build_kind == 'core') || (github.event_name == 'workflow_dispatch' && inputs.kind == 'core')
     runs-on: ubuntu-latest
@@ -58,6 +59,21 @@ jobs:
         run: |
           [[ "$SOURCE_SHA" =~ ^[0-9a-fA-F]{40}$ ]] || { echo 'source_sha must be a 40-character commit SHA' >&2; exit 1; }
           [[ -n "$IRIS_BUILD_DEPLOY_KEY" && -n "$IRIS_TAG_DEPLOY_KEY" && -n "$IRIS_RELEASE_UPLOAD_TOKEN" ]] || { echo 'required secrets are missing' >&2; exit 1; }
+      - name: Setup Node.js
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - name: Checkout release tools
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: ${{ github.sha }}
+          path: .release-tools
+          persist-credentials: false
+      - name: Wait for the pending shell release to publish
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node .release-tools/scripts/publish-shell.mjs gate
       - name: Checkout exact private source
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
@@ -73,11 +89,6 @@ jobs:
             [[ "$entry" == "iris-source/.git" ]] && continue
             cp -R "$entry" ./
           done
-      - name: Setup Node.js
-        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
-        with:
-          node-version: 24
-          package-manager-cache: false
       - name: Install pnpm
         run: |
           npm install --global --force corepack@0.34.1
@@ -210,6 +221,7 @@ jobs:
 
   shell-check:
     permissions:
+      actions: read
       contents: read
     if: (github.event_name == 'repository_dispatch' && github.event.action == 'iris-build' && github.event.client_payload.build_kind == 'shell') || (github.event_name == 'workflow_dispatch' && inputs.kind == 'shell')
     runs-on: ubuntu-latest
@@ -232,9 +244,10 @@ jobs:
           IRIS_TAG_DEPLOY_KEY: ${{ secrets.IRIS_TAG_DEPLOY_KEY }}
           IRIS_RELEASE_UPLOAD_TOKEN: ${{ secrets.IRIS_RELEASE_UPLOAD_TOKEN }}
           IRIS_RELEASE_KEY_TRANSFER_KEY: ${{ secrets.IRIS_RELEASE_KEY_TRANSFER_KEY }}
+          IRIS_CONTEXT_SEAL_KEY: ${{ secrets.IRIS_CONTEXT_SEAL_KEY }}
         run: |
           [[ "$SOURCE_SHA" =~ ^[0-9a-fA-F]{40}$ ]] || exit 1
-          [[ -n "$IRIS_BUILD_DEPLOY_KEY" && -n "$IRIS_TAG_DEPLOY_KEY" && -n "$IRIS_RELEASE_UPLOAD_TOKEN" && -n "$IRIS_RELEASE_KEY_TRANSFER_KEY" ]] || { echo 'required secrets are missing' >&2; exit 1; }
+          [[ -n "$IRIS_BUILD_DEPLOY_KEY" && -n "$IRIS_TAG_DEPLOY_KEY" && -n "$IRIS_RELEASE_UPLOAD_TOKEN" && -n "$IRIS_RELEASE_KEY_TRANSFER_KEY" && "${#IRIS_CONTEXT_SEAL_KEY}" -ge 32 ]] || { echo 'required secrets are missing' >&2; exit 1; }
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
           repository: lsy-404/IRIS
@@ -258,6 +271,16 @@ jobs:
           npm install --global --force corepack@0.34.1
           corepack enable pnpm
           corepack prepare pnpm@10.34.6 --activate
+      - name: Checkout release tools
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: ${{ github.sha }}
+          path: .release-tools
+          persist-credentials: false
+      - name: Wait for the previous shell release to publish
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node .release-tools/scripts/publish-shell.mjs gate
       - name: Prepare release and core payload
         id: prepare
         env:
@@ -325,8 +348,6 @@ jobs:
         include:
           - os: windows-latest
             dist_cmd: pnpm run dist:win --publish never
-          - os: macos-latest
-            dist_cmd: pnpm run dist:mac --publish never
           - os: ubuntu-latest
             dist_cmd: pnpm run dist:linux --publish never
     runs-on: ${{ matrix.os }}
@@ -388,20 +409,29 @@ jobs:
           name: installers-${{ matrix.os }}
           path: staged-installers
           if-no-files-found: error
-          retention-days: 1
+          retention-days: 3
       - name: Wipe build workspace
         if: always()
         run: rm -rf "$RUNNER_TEMP/iris-release-key" "$RUNNER_TEMP/iris-release-envelope" iris-source staged-installers build
 
-  shell-release:
+  shell-build-macos:
     needs: [shell-check, shell-build]
-    runs-on: ubuntu-latest
+    runs-on: macos-latest
+    timeout-minutes: 90
     permissions:
-      actions: write
-      contents: write
+      contents: read
     steps:
+      - name: Reject workflow reruns
+        if: ${{ github.run_attempt != 1 }}
+        run: exit 1
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
+          persist-credentials: false
+      - name: Checkout release tools
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: ${{ github.sha }}
+          path: .release-tools
           persist-credentials: false
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
@@ -410,13 +440,13 @@ jobs:
           path: iris-source
           ssh-key: ${{ secrets.IRIS_BUILD_DEPLOY_KEY }}
           persist-credentials: false
+          fetch-depth: 0
       - run: |
           shopt -s dotglob nullglob
           for entry in iris-source/*; do
             [[ "$entry" == "iris-source/.git" ]] && continue
             cp -R "$entry" ./
           done
-          rm -rf certificates
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
         with:
           node-version: 24
@@ -426,69 +456,83 @@ jobs:
           npm install --global --force corepack@0.34.1
           corepack enable pnpm
           corepack prepare pnpm@10.34.6 --activate
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
-        with:
-          pattern: installers-*
-          merge-multiple: true
-          path: staged-installers
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
-        with:
-          name: core-payload
-          path: .
-      - name: Publish to license service
+      - name: Build installer
         env:
+          npm_config_node_gyp: ${{ github.workspace }}/node_modules/node-gyp/bin/node-gyp.js
+          IRIS_SHELL_VERSION: ${{ needs.shell-check.outputs.shell_version }}
           IRIS_RELEASE_KEY_TRANSFER_KEY: ${{ secrets.IRIS_RELEASE_KEY_TRANSFER_KEY }}
           IRIS_RELEASE_KEY_ENVELOPE: ${{ needs.shell-check.outputs.release_envelope }}
           IRIS_RELEASE_ID: ${{ needs.shell-check.outputs.release_id }}
-          IRIS_INTERNAL_VERSION: ${{ needs.shell-check.outputs.internal_version }}
-          IRIS_SHELL_VERSION: ${{ needs.shell-check.outputs.shell_version }}
+          IRIS_CORE_BUILD: ${{ needs.shell-check.outputs.core_build }}
           IRIS_CORE_VERSION: ${{ needs.shell-check.outputs.core_version }}
-          IRIS_SHELL_FINGERPRINT: ${{ needs.shell-check.outputs.shell_fingerprint }}
+          IRIS_INTERNAL_VERSION: ${{ needs.shell-check.outputs.internal_version }}
+          IRIS_SOURCE_SHA: ${{ needs.shell-check.outputs.source_sha }}
+          IRIS_LICENSE_BUILD_API_ORIGIN: https://iris.voidcarve.com
           IRIS_RELEASE_UPLOAD_TOKEN: ${{ secrets.IRIS_RELEASE_UPLOAD_TOKEN }}
+          DIST_CMD: pnpm run dist:mac --publish never
+          EP_PREPACKAGED: ''
+          NODE_OPTIONS: --max-old-space-size=4096
           WORKFLOW_REPORT_TOKEN: ${{ secrets.IRIS_RELEASE_UPLOAD_TOKEN }}
-          IRIS_STAGED_DIR: staged-installers
         run: |
+          node .github/scripts/run-quiet.mjs -- bash .github/scripts/release-step.sh apply-version
+          node .github/scripts/run-quiet.mjs -- bash .github/scripts/release-step.sh install
           node .github/scripts/run-quiet.mjs -- bash .github/scripts/release-step.sh decrypt-key
-          node .github/scripts/run-quiet.mjs -- bash .github/scripts/release-step.sh upload-payload with-key
-          node .github/scripts/run-quiet.mjs -- bash .github/scripts/release-step.sh publish-shell-assets
-      - name: Checkout source for shell and core tags
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+          node .github/scripts/run-quiet.mjs -- bash .github/scripts/release-step.sh build
+      - name: Prepare macOS signing sources
+        id: prepare
+        env:
+          INPUT_VERSION: ${{ needs.shell-check.outputs.shell_version }}
+          INPUT_SOURCE_SHA: ${{ needs.shell-check.outputs.source_sha }}
+        run: node .release-tools/scripts/submit-macos.mjs prepare
+      - name: Submit arm64 for signing
+        id: arm64
+        env:
+          SIGNING_API_KEY: ${{ secrets.SIGNING_API_KEY }}
+          INPUT_ARCH: arm64
+          INPUT_WORK_DIR: ${{ steps.prepare.outputs.arm64_work_dir }}
+          INPUT_VERSION: ${{ needs.shell-check.outputs.shell_version }}
+          INPUT_SOURCE_SHA: ${{ needs.shell-check.outputs.source_sha }}
+        run: node .release-tools/scripts/submit-macos.mjs submit
+      - name: Submit x64 for signing
+        id: x64
+        env:
+          SIGNING_API_KEY: ${{ secrets.SIGNING_API_KEY }}
+          INPUT_ARCH: x64
+          INPUT_WORK_DIR: ${{ steps.prepare.outputs.x64_work_dir }}
+          INPUT_VERSION: ${{ needs.shell-check.outputs.shell_version }}
+          INPUT_SOURCE_SHA: ${{ needs.shell-check.outputs.source_sha }}
+        run: node .release-tools/scripts/submit-macos.mjs submit
+      - name: Record shell release context
+        id: context
+        env:
+          IRIS_CONTEXT_SEAL_KEY: ${{ secrets.IRIS_CONTEXT_SEAL_KEY }}
+          INPUT_SOURCE_SHA: ${{ needs.shell-check.outputs.source_sha }}
+          INPUT_SHELL_VERSION: ${{ needs.shell-check.outputs.shell_version }}
+          INPUT_INTERNAL_VERSION: ${{ needs.shell-check.outputs.internal_version }}
+          INPUT_CORE_BUILD: ${{ needs.shell-check.outputs.core_build }}
+          INPUT_CORE_VERSION: ${{ needs.shell-check.outputs.core_version }}
+          INPUT_SHELL_FINGERPRINT: ${{ needs.shell-check.outputs.shell_fingerprint }}
+          INPUT_RELEASE_ID: ${{ needs.shell-check.outputs.release_id }}
+          INPUT_RELEASE_ENVELOPE: ${{ needs.shell-check.outputs.release_envelope }}
+          INPUT_ARM64_REQUEST_ID: ${{ steps.arm64.outputs.request_id }}
+          INPUT_ARM64_INPUT_DIGEST: ${{ steps.arm64.outputs.input_digest }}
+          INPUT_ARM64_INPUT_SIZE: ${{ steps.arm64.outputs.input_size }}
+          INPUT_X64_REQUEST_ID: ${{ steps.x64.outputs.request_id }}
+          INPUT_X64_INPUT_DIGEST: ${{ steps.x64.outputs.input_digest }}
+          INPUT_X64_INPUT_SIZE: ${{ steps.x64.outputs.input_size }}
+        run: node .release-tools/scripts/submit-macos.mjs context
+      - name: Hand the release to the publish workflow
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          repository: lsy-404/IRIS
-          ref: ${{ needs.shell-check.outputs.source_sha }}
-          path: tag-source
-          ssh-key: ${{ secrets.IRIS_TAG_DEPLOY_KEY }}
-          persist-credentials: true
-      - name: Tag published shell and core source
-        working-directory: tag-source
-        run: bash .github/scripts/tag-build-commit.sh "shell-v${{ needs.shell-check.outputs.shell_version }}" "core-v${{ needs.shell-check.outputs.core_version }}"
-      - name: Mirror GitHub Release
+          name: shell-release-context
+          path: ${{ steps.context.outputs.path }}
+          if-no-files-found: error
+          retention-days: 3
+      - name: Remove signing sources
+        if: always() && (steps.prepare.outputs.arm64_work_dir != '' || steps.prepare.outputs.x64_work_dir != '')
         env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          mkdir -p release-assets
-          cp build/secure-payload/payload.irp build/secure-payload/ui.irp electron/dist/build-info.json release-assets/
-          cp staged-installers/* release-assets/
-          gh release view latest >/dev/null 2>&1 || gh release create latest --title latest --notes '' --latest
-          gh release edit latest --title latest --notes '' --latest
-          gh release view latest --json assets --jq '.assets[].name' | while IFS= read -r asset; do gh release delete-asset latest "$asset" --yes >/dev/null; done
-          gh release upload latest release-assets/* --clobber
-          tag_state="$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/latest" --jq '[.name,.tag_name,(.body // ""),.draft,.prerelease,.id] | @tsv')"
-          latest_id="$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq .id)"
-          [[ "$tag_state" == *$'latest\tlatest\t\tfalse\tfalse\t'* && "$tag_state" == *$'\t'"$latest_id" ]]
-          expected="$(find release-assets -maxdepth 1 -type f -exec basename {} \; | sort | paste -sd, -)"
-          actual="$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/latest" --jq '[.assets[].name] | sort | join(",")')"
-          [[ "$actual" == "$expected" ]]
-          test "$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/latest" --jq '[.assets[] | select(.state != "uploaded")] | length')" = 0
-      - name: Delete transient build artifacts
-        if: success()
-        continue-on-error: true
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh api --paginate "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/artifacts?per_page=100" --jq '.artifacts[].id' | while IFS= read -r artifact_id; do
-            gh api --method DELETE "repos/$GITHUB_REPOSITORY/actions/artifacts/$artifact_id"
-          done
-      - name: Wipe shell-release workspace
+          INPUT_WORK_DIRS: ${{ steps.prepare.outputs.arm64_work_dir }} ${{ steps.prepare.outputs.x64_work_dir }}
+        run: node .release-tools/scripts/submit-macos.mjs cleanup
+      - name: Wipe build workspace
         if: always()
-        run: rm -rf "$RUNNER_TEMP/iris-release-key" "$RUNNER_TEMP/iris-release-envelope" "$RUNNER_TEMP/iris-signing.p12" iris-source tag-source staged-installers release-assets build
+        run: rm -rf "$RUNNER_TEMP/iris-release-key" "$RUNNER_TEMP/iris-release-envelope" "$RUNNER_TEMP/shell-release-context" iris-source build release

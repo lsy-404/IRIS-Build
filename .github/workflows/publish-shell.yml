@@ -1,0 +1,323 @@
+name: Publish IRIS shell
+
+on:
+  workflow_run:
+    workflows: [Build IRIS]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      build_run_id:
+        description: Successful Build IRIS shell run id
+        required: true
+        type: string
+      release_held:
+        description: Publish a run that was held for review
+        required: false
+        type: boolean
+        default: false
+
+permissions: {}
+
+env:
+  IRIS_LICENSE_API_URL: https://iris.voidcarve.com
+  IRIS_LICENSE_BUILD_API_ORIGIN: https://iris.voidcarve.com
+  WORKFLOW_REPORT_API: https://iris.voidcarve.com/api/v1/internal/workflow-reports
+  BUILD_RUN_ID: ${{ github.event.workflow_run.id || inputs.build_run_id }}
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  resolve:
+    if: (github.event_name == 'workflow_dispatch' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)) || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.run_attempt == 1 && github.event.workflow_run.path == '.github/workflows/build.yml' && github.event.workflow_run.head_branch == github.event.repository.default_branch && github.event.workflow_run.repository.id == github.event.repository.id)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      shell: ${{ steps.run.outputs.shell }}
+      source_sha: ${{ steps.ctx.outputs.source_sha }}
+      shell_version: ${{ steps.ctx.outputs.shell_version }}
+      arm64_request_id: ${{ steps.ctx.outputs.arm64_request_id }}
+      arm64_input_digest: ${{ steps.ctx.outputs.arm64_input_digest }}
+      x64_request_id: ${{ steps.ctx.outputs.x64_request_id }}
+      x64_input_digest: ${{ steps.ctx.outputs.x64_input_digest }}
+    steps:
+      - name: Reject workflow reruns
+        if: ${{ github.run_attempt != 1 }}
+        run: exit 1
+      - name: Checkout release tools
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: ${{ github.sha }}
+          path: .release-tools
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - name: Resolve build run
+        id: run
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          INPUT_BUILD_RUN_ID: ${{ env.BUILD_RUN_ID }}
+        run: node .release-tools/scripts/publish-shell.mjs resolve
+      - name: Download release context
+        if: steps.run.outputs.shell == 'true'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: shell-release-context
+          path: ${{ runner.temp }}/shell-release-context
+          run-id: ${{ env.BUILD_RUN_ID }}
+          github-token: ${{ github.token }}
+      - name: Read public release context
+        id: ctx
+        if: steps.run.outputs.shell == 'true'
+        env:
+          INPUT_CONTEXT_FILE: ${{ runner.temp }}/shell-release-context/context.json
+          INPUT_BUILD_RUN_ID: ${{ env.BUILD_RUN_ID }}
+        run: node .release-tools/scripts/publish-shell.mjs context --public
+
+  await-signing:
+    needs: resolve
+    if: needs.resolve.outputs.shell == 'true' && (vars.IRIS_SHELL_PUBLISH_HOLD != 'true' || (github.event_name == 'workflow_dispatch' && inputs.release_held))
+    runs-on: ubuntu-latest
+    timeout-minutes: 190
+    permissions:
+      contents: read
+    steps:
+      - name: Reject workflow reruns
+        if: ${{ github.run_attempt != 1 }}
+        run: exit 1
+      - name: Checkout release tools
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: ${{ github.sha }}
+          path: .release-tools
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - name: Wait for notarization
+        env:
+          SIGNING_API_KEY: ${{ secrets.SIGNING_API_KEY }}
+          INPUT_BUILD_RUN_ID: ${{ env.BUILD_RUN_ID }}
+          INPUT_VERSION: ${{ needs.resolve.outputs.shell_version }}
+          INPUT_SOURCE_SHA: ${{ needs.resolve.outputs.source_sha }}
+          INPUT_ARM64_REQUEST_ID: ${{ needs.resolve.outputs.arm64_request_id }}
+          INPUT_ARM64_INPUT_DIGEST: ${{ needs.resolve.outputs.arm64_input_digest }}
+          INPUT_X64_REQUEST_ID: ${{ needs.resolve.outputs.x64_request_id }}
+          INPUT_X64_INPUT_DIGEST: ${{ needs.resolve.outputs.x64_input_digest }}
+          INPUT_TIMEOUT_SECONDS: '10800'
+        run: node .release-tools/scripts/publish-shell.mjs await
+
+  verify-macos:
+    needs: [resolve, await-signing]
+    runs-on: macos-15
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    steps:
+      - name: Reject workflow reruns
+        if: ${{ github.run_attempt != 1 }}
+        run: exit 1
+      - name: Checkout release tools
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: ${{ github.sha }}
+          path: .release-tools
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - name: Fetch and verify signed images
+        id: fetch
+        env:
+          SIGNING_API_KEY: ${{ secrets.SIGNING_API_KEY }}
+          INPUT_BUILD_RUN_ID: ${{ env.BUILD_RUN_ID }}
+          INPUT_VERSION: ${{ needs.resolve.outputs.shell_version }}
+          INPUT_SOURCE_SHA: ${{ needs.resolve.outputs.source_sha }}
+          INPUT_ARM64_REQUEST_ID: ${{ needs.resolve.outputs.arm64_request_id }}
+          INPUT_ARM64_INPUT_DIGEST: ${{ needs.resolve.outputs.arm64_input_digest }}
+          INPUT_X64_REQUEST_ID: ${{ needs.resolve.outputs.x64_request_id }}
+          INPUT_X64_INPUT_DIGEST: ${{ needs.resolve.outputs.x64_input_digest }}
+        run: node .release-tools/scripts/publish-shell.mjs fetch
+      - name: Hand the signed images to the publish job
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: signed-macos
+          path: ${{ steps.fetch.outputs.dir }}
+          if-no-files-found: error
+          retention-days: 1
+      - name: Wipe signed workspace
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/iris-signed-$GITHUB_RUN_ID" "$RUNNER_TEMP/signed-macos"
+
+  publish:
+    needs: [resolve, verify-macos]
+    if: vars.IRIS_SHELL_PUBLISH_HOLD != 'true' || (github.event_name == 'workflow_dispatch' && inputs.release_held)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    concurrency:
+      group: iris-publish-shell
+      cancel-in-progress: false
+    permissions:
+      actions: write
+      contents: write
+    env:
+      SOURCE_SHA: ${{ needs.resolve.outputs.source_sha }}
+      IRIS_SOURCE_SHA: ${{ needs.resolve.outputs.source_sha }}
+    steps:
+      - name: Reject workflow reruns
+        if: ${{ github.run_attempt != 1 }}
+        run: exit 1
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - name: Checkout release tools
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: ${{ github.sha }}
+          path: .release-tools
+          persist-credentials: false
+      - name: Validate secrets
+        env:
+          IRIS_BUILD_DEPLOY_KEY: ${{ secrets.IRIS_BUILD_DEPLOY_KEY }}
+          IRIS_TAG_DEPLOY_KEY: ${{ secrets.IRIS_TAG_DEPLOY_KEY }}
+          IRIS_RELEASE_UPLOAD_TOKEN: ${{ secrets.IRIS_RELEASE_UPLOAD_TOKEN }}
+          IRIS_RELEASE_KEY_TRANSFER_KEY: ${{ secrets.IRIS_RELEASE_KEY_TRANSFER_KEY }}
+          IRIS_CONTEXT_SEAL_KEY: ${{ secrets.IRIS_CONTEXT_SEAL_KEY }}
+        run: |
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]] || exit 1
+          [[ -n "$IRIS_BUILD_DEPLOY_KEY" && -n "$IRIS_TAG_DEPLOY_KEY" && -n "$IRIS_RELEASE_UPLOAD_TOKEN" && -n "$IRIS_RELEASE_KEY_TRANSFER_KEY" && "${#IRIS_CONTEXT_SEAL_KEY}" -ge 32 ]] || { echo 'required secrets are missing' >&2; exit 1; }
+      - name: Checkout exact private source
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          repository: lsy-404/IRIS
+          ref: ${{ env.SOURCE_SHA }}
+          path: iris-source
+          ssh-key: ${{ secrets.IRIS_BUILD_DEPLOY_KEY }}
+          persist-credentials: false
+      - name: Use source scripts
+        run: |
+          shopt -s dotglob nullglob
+          for entry in iris-source/*; do
+            [[ "$entry" == "iris-source/.git" ]] && continue
+            cp -R "$entry" ./
+          done
+          rm -rf certificates
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - name: Install pnpm
+        run: |
+          npm install --global --force corepack@0.34.1
+          corepack enable pnpm
+          corepack prepare pnpm@10.34.6 --activate
+      - name: Download staged installers
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          pattern: installers-*
+          merge-multiple: true
+          path: staged-installers
+          run-id: ${{ env.BUILD_RUN_ID }}
+          github-token: ${{ github.token }}
+      - name: Download core payload
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: core-payload
+          path: .
+          run-id: ${{ env.BUILD_RUN_ID }}
+          github-token: ${{ github.token }}
+      - name: Download release context
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: shell-release-context
+          path: ${{ runner.temp }}/shell-release-context
+          run-id: ${{ env.BUILD_RUN_ID }}
+          github-token: ${{ github.token }}
+      - name: Download signed images
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: signed-macos
+          path: ${{ runner.temp }}/signed-macos
+      - name: Read release context
+        id: ctx
+        env:
+          IRIS_CONTEXT_SEAL_KEY: ${{ secrets.IRIS_CONTEXT_SEAL_KEY }}
+          INPUT_CONTEXT_FILE: ${{ runner.temp }}/shell-release-context/context.json
+          INPUT_BUILD_RUN_ID: ${{ env.BUILD_RUN_ID }}
+        run: node .release-tools/scripts/publish-shell.mjs context
+      - name: Assemble release
+        env:
+          IRIS_STAGED_DIR: staged-installers
+          INPUT_SIGNED_DIR: ${{ runner.temp }}/signed-macos
+          INPUT_VERSION: ${{ steps.ctx.outputs.shell_version }}
+        run: node .release-tools/scripts/publish-shell.mjs assemble
+      - name: Check what is already published
+        id: pre
+        env:
+          IRIS_RELEASE_UPLOAD_TOKEN: ${{ secrets.IRIS_RELEASE_UPLOAD_TOKEN }}
+          INPUT_VERSION: ${{ steps.ctx.outputs.shell_version }}
+          INPUT_RELEASE_ID: ${{ steps.ctx.outputs.release_id }}
+        run: node .release-tools/scripts/publish-shell.mjs preflight
+      - name: Publish to license service
+        if: steps.pre.outputs.already != 'true'
+        env:
+          IRIS_RELEASE_KEY_TRANSFER_KEY: ${{ secrets.IRIS_RELEASE_KEY_TRANSFER_KEY }}
+          IRIS_RELEASE_KEY_ENVELOPE: ${{ steps.ctx.outputs.release_envelope }}
+          IRIS_RELEASE_ID: ${{ steps.ctx.outputs.release_id }}
+          IRIS_INTERNAL_VERSION: ${{ steps.ctx.outputs.internal_version }}
+          IRIS_SHELL_VERSION: ${{ steps.ctx.outputs.shell_version }}
+          IRIS_CORE_VERSION: ${{ steps.ctx.outputs.core_version }}
+          IRIS_SHELL_FINGERPRINT: ${{ steps.ctx.outputs.shell_fingerprint }}
+          IRIS_RELEASE_UPLOAD_TOKEN: ${{ secrets.IRIS_RELEASE_UPLOAD_TOKEN }}
+          WORKFLOW_REPORT_TOKEN: ${{ secrets.IRIS_RELEASE_UPLOAD_TOKEN }}
+          IRIS_STAGED_DIR: staged-installers
+        run: |
+          node .github/scripts/run-quiet.mjs -- bash .github/scripts/release-step.sh decrypt-key
+          node .github/scripts/run-quiet.mjs -- bash .github/scripts/release-step.sh upload-payload with-key
+          node .github/scripts/run-quiet.mjs -- bash .github/scripts/release-step.sh publish-shell-assets
+      - name: Checkout source for shell and core tags
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          repository: lsy-404/IRIS
+          ref: ${{ env.SOURCE_SHA }}
+          path: tag-source
+          ssh-key: ${{ secrets.IRIS_TAG_DEPLOY_KEY }}
+          persist-credentials: true
+      - name: Tag published shell and core source
+        working-directory: tag-source
+        run: bash .github/scripts/tag-build-commit.sh "shell-v${{ steps.ctx.outputs.shell_version }}" "core-v${{ steps.ctx.outputs.core_version }}"
+      - name: Mirror GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p release-assets
+          cp build/secure-payload/payload.irp build/secure-payload/ui.irp electron/dist/build-info.json release-assets/
+          cp staged-installers/* release-assets/
+          gh release view latest >/dev/null 2>&1 || gh release create latest --title latest --notes '' --latest
+          gh release edit latest --title latest --notes '' --latest
+          gh release view latest --json assets --jq '.assets[].name' | while IFS= read -r asset; do gh release delete-asset latest "$asset" --yes >/dev/null; done
+          gh release upload latest release-assets/* --clobber
+          tag_state="$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/latest" --jq '[.name,.tag_name,(.body // ""),.draft,.prerelease,.id] | @tsv')"
+          latest_id="$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq .id)"
+          [[ "$tag_state" == *$'latest\tlatest\t\tfalse\tfalse\t'* && "$tag_state" == *$'\t'"$latest_id" ]]
+          expected="$(find release-assets -maxdepth 1 -type f -exec basename {} \; | sort | paste -sd, -)"
+          actual="$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/latest" --jq '[.assets[].name] | sort | join(",")')"
+          [[ "$actual" == "$expected" ]]
+          test "$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/latest" --jq '[.assets[] | select(.state != "uploaded")] | length')" = 0
+      - name: Delete transient build artifacts
+        if: success()
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          INPUT_BUILD_RUN_ID: ${{ env.BUILD_RUN_ID }}
+        run: node .release-tools/scripts/publish-shell.mjs cleanup-artifacts
+      - name: Wipe shell-release workspace
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/iris-release-key" "$RUNNER_TEMP/iris-release-envelope" "$RUNNER_TEMP/iris-signing.p12" "$RUNNER_TEMP/shell-release-context" "$RUNNER_TEMP/signed-macos" iris-source tag-source staged-installers release-assets build

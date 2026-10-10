@@ -1,10 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-workflow="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/.github/workflows/build.yml"
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+workflow="$root/.github/workflows/build.yml"
+publish_workflow="$root/.github/workflows/publish-shell.yml"
 
 ruby -r yaml -e '
   workflow = YAML.load_file(ARGV.fetch(0))
+  publish = YAML.load_file(ARGV.fetch(1)).fetch("jobs").fetch("publish")
   jobs = workflow.fetch("jobs")
   text = File.read(ARGV.fetch(0))
 
@@ -51,10 +54,14 @@ ruby -r yaml -e '
 
   shell_build = jobs.fetch("shell-build")
   matrix = shell_build.fetch("strategy").fetch("matrix").fetch("include")
-  raise "shell matrix must retain three platforms" unless matrix.map { |entry| entry.fetch("os") }.sort == %w[macos-latest ubuntu-latest windows-latest]
+  raise "shell matrix must hold the unsigned-free platforms" unless matrix.map { |entry| entry.fetch("os") }.sort == %w[ubuntu-latest windows-latest]
   installer = steps(shell_build).find { |step| step["name"] == "Build installer" }
   raise "shell installer build is missing" unless installer
   raise "installer must decrypt release key" unless installer.fetch("run").include?("decrypt-key")
+  shell_build_macos = jobs.fetch("shell-build-macos")
+  macos_installer = steps(shell_build_macos).find { |step| step["name"] == "Build installer" }
+  raise "macOS installer build is missing" unless macos_installer
+  raise "shell-build-macos Build installer must decrypt release key" unless macos_installer.fetch("run").include?("decrypt-key")
 
   [[core, "Generate core release key"], [shell_check, "Generate release key"]].each do |job, next_step|
     entries = steps(job)
@@ -64,13 +71,12 @@ ruby -r yaml -e '
   end
 
   raise "core release tag is missing" unless steps(core).any? { |step| step["name"] == "Tag published core source" && step.fetch("run").include?("tag-build-commit.sh") }
-  shell_release = jobs.fetch("shell-release")
-  raise "shell release must require shell-check and shell-build" unless shell_release.fetch("needs") == ["shell-check", "shell-build"]
-  release_run = steps(shell_release).find { |step| step["name"] == "Mirror GitHub Release" }.fetch("run")
+  raise "publish must require resolve and verify-macos" unless publish.fetch("needs") == ["resolve", "verify-macos"]
+  release_run = steps(publish).find { |step| step["name"] == "Mirror GitHub Release" }.fetch("run")
   raise "release must verify immutable asset state" unless release_run.include?("state != \"uploaded\"")
 
-  [core, shell_check, shell_build, shell_release].each do |job|
+  [core, shell_check, shell_build, shell_build_macos, publish].each do |job|
     raise "secrets cleanup is missing" unless steps(job).any? { |step| step["name"].to_s.start_with?("Wipe") && step.fetch("run", "").include?("rm -rf") }
   end
   puts "retired PRO dependencies are absent and release gates remain protected"
-' "$workflow"
+' "$workflow" "$publish_workflow"

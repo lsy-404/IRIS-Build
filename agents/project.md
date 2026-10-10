@@ -14,7 +14,9 @@
 
 ## 模块结构
 
-- `.github/workflows/build.yml`：core、shell-check、shell-build、shell-release 构建及发布编排
+- `.github/workflows/build.yml`：core、shell-check、shell-build、shell-build-macos 构建（shell 构建只提交 macOS 签名请求，不发布）
+- `.github/workflows/publish-shell.yml`：等待签名中心签名、验证并发布 shell 全部平台资产
+- `scripts/`：macOS 签名请求提交与 shell 发布脚本
 - `.github/scripts/`：安装、构建、发布、版本与工作流报告脚本
 
 ## 相关约束
