@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
-import { createWriteStream } from 'node:fs';
-import { chmod, copyFile, lstat, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { createReadStream, createWriteStream } from 'node:fs';
+import { chmod, copyFile, lstat, stat, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { pipeline } from 'node:stream/promises';
@@ -9,9 +9,14 @@ import { fileURLToPath } from 'node:url';
 
 const API_ROOT = 'https://api.github.com/repos';
 const SIGN_ENDPOINT = 'https://sign.voidcarve.com/v1/requests';
+const MIN_PART_BYTES = 5 * 1024 * 1024;
+const MAX_PART_BYTES = 64 * 1024 * 1024;
+const PART_ATTEMPTS = 5;
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const IRIS_BUILD = 'lsy-404/IRIS-Build';
 const EPILOGUE = 'lsy-404/epilogue';
 const MARKER = '.macos-import-run';
+const BUNDLE_NAME = 'source.zip';
 const MAX_JSON_BYTES = 1_000_000;
 
 const products = Object.freeze({
@@ -167,8 +172,8 @@ async function resolveSourceSha(config, workDir, token) {
   throw new ImportError('INVALID_PRODUCT_CONFIG');
 }
 
-function runnerTemp() {
-  const dir = process.env.RUNNER_TEMP;
+function runnerTemp(env = process.env) {
+  const dir = env.RUNNER_TEMP;
   if (!dir || !path.isAbsolute(dir)) throw new ImportError('TEMP_UNAVAILABLE');
   return path.resolve(dir);
 }
@@ -248,8 +253,10 @@ async function prepare() {
     const source = { source_sha: sourceSha, version: config.version, bundle_id: bundleId, architecture: config.architecture };
     await writeFile(path.join(outputDir, 'source.json'), `${JSON.stringify(source)}\n`, { flag: 'wx', mode: 0o600 });
     for (const name of ['unsigned.tar.gz', 'template.dmg', 'source.json']) await chmod(path.join(outputDir, name), 0o600);
+    const bundlePath = path.join(workDir, BUNDLE_NAME);
+    run('/usr/bin/zip', ['-q', '-X', '-j', '-0', bundlePath, tarPath, path.join(outputDir, 'template.dmg'), path.join(outputDir, 'source.json')]);
+    await chmod(bundlePath, 0o600);
     await writeOutput('work_dir', workDir);
-    await writeOutput('output_dir', outputDir);
     await writeOutput('version', config.version);
     await writeOutput('source_sha', sourceSha);
     if (mounted) {
@@ -269,9 +276,9 @@ async function prepare() {
   }
 }
 
-async function checkedWorkDir(value, product, runId) {
+async function checkedWorkDir(value, product, runId, env = process.env) {
   const workDir = path.resolve(value ?? '');
-  if (path.dirname(workDir) !== runnerTemp() || !path.basename(workDir).startsWith(`iris-macos-import-${runId}-`)) throw new ImportError('INVALID_TEMP_DIR');
+  if (path.dirname(workDir) !== runnerTemp(env) || !path.basename(workDir).startsWith(`iris-macos-import-${runId}-`)) throw new ImportError('INVALID_TEMP_DIR');
   try {
     const marker = (await readFile(path.join(workDir, MARKER), 'utf8')).split('\n');
     if (marker[0] !== runId || marker[1] !== product) throw new ImportError('INVALID_TEMP_DIR');
@@ -283,43 +290,106 @@ async function checkedWorkDir(value, product, runId) {
   return workDir;
 }
 
-async function submit() {
-  const product = process.env.INPUT_PRODUCT;
+async function bundleDigest(file) {
+  const hash = createHash('sha256');
+  let size = 0;
+  for await (const chunk of createReadStream(file)) { hash.update(chunk); size += chunk.length; }
+  return { digest: `sha256:${hash.digest('hex')}`, size };
+}
+
+const defaultSleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+async function centerJson(fetchImpl, url, method, apiKey, body, extraHeaders = {}) {
+  let response;
+  try {
+    response = await fetchImpl(url, {
+      method,
+      redirect: 'error',
+      headers: { authorization: `Bearer ${apiKey}`, 'content-type': 'application/json', accept: 'application/json', ...extraHeaders },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(30_000),
+    });
+  } catch { throw new ImportError('SIGNING_REQUEST_FAILED'); }
+  if (!response.ok) throw new ImportError('SIGNING_REQUEST_FAILED');
+  return jsonResponse(response);
+}
+
+function validateUploadPlan(plan, bundle) {
+  const received = plan?.received_parts;
+  if (!Number.isInteger(plan?.part_size) || plan.part_size < MIN_PART_BYTES || plan.part_size > MAX_PART_BYTES
+    || !Number.isInteger(plan.part_count) || plan.part_count !== Math.ceil(bundle.size / plan.part_size)
+    || !Array.isArray(received) || !received.every((n) => Number.isInteger(n) && n >= 1 && n <= plan.part_count)) throw new ImportError('SIGNING_REQUEST_FAILED');
+  return plan;
+}
+
+async function putPart(fetchImpl, url, apiKey, file, start, length) {
+  const response = await fetchImpl(url, {
+    method: 'PUT',
+    redirect: 'error',
+    headers: { authorization: `Bearer ${apiKey}`, 'content-type': 'application/octet-stream', 'content-length': String(length) },
+    body: createReadStream(file, { start, end: start + length - 1 }),
+    duplex: 'half',
+    signal: AbortSignal.timeout(300_000),
+  });
+  await response.body?.cancel();
+  return response.status;
+}
+
+async function uploadParts(fetchImpl, sleep, base, apiKey, file, bundle) {
+  let plan = validateUploadPlan(await centerJson(fetchImpl, `${base}/source`, 'POST', apiKey, {}), bundle);
+  for (let part = 1; part <= plan.part_count; part += 1) {
+    if (plan.received_parts.includes(part)) continue;
+    const start = (part - 1) * plan.part_size;
+    const length = Math.min(plan.part_size, bundle.size - start);
+    for (let attempt = 1; ; attempt += 1) {
+      let status = 0;
+      try { status = await putPart(fetchImpl, `${base}/source/parts/${part}`, apiKey, file, start, length); } catch { status = 0; }
+      if (status === 200) break;
+      const transient = status === 0 || status >= 500 || status === 408 || status === 429;
+      if (!transient || attempt >= PART_ATTEMPTS) throw new ImportError('SOURCE_UPLOAD_FAILED');
+      await sleep(2000 * 2 ** (attempt - 1));
+      plan = validateUploadPlan(await centerJson(fetchImpl, `${base}/source`, 'POST', apiKey, {}), bundle);
+      if (plan.received_parts.includes(part)) break;
+    }
+  }
+}
+
+export async function submitSource({ fetchImpl = fetch, env = process.env, sleep = defaultSleep } = {}) {
+  const product = env.INPUT_PRODUCT;
   const config = productConfig(product);
-  const runId = validateRunId(process.env.GITHUB_RUN_ID);
-  const runAttempt = process.env.GITHUB_RUN_ATTEMPT;
-  const artifactId = process.env.INPUT_ARTIFACT_ID;
-  if (runAttempt !== '1' || !/^\d+$/.test(artifactId ?? '') || !Number.isSafeInteger(Number(artifactId)) || Number(artifactId) < 1) throw new ImportError('INVALID_SIGNING_REQUEST');
-  if (process.env.INPUT_VERSION !== config.version || process.env.INPUT_SOURCE_SHA !== config.sourceSha) throw new ImportError('INVALID_SIGNING_REQUEST');
-  const workDir = await checkedWorkDir(process.env.INPUT_WORK_DIR, product, runId);
+  const runId = validateRunId(env.GITHUB_RUN_ID);
+  if (env.GITHUB_RUN_ATTEMPT !== '1') throw new ImportError('INVALID_SIGNING_REQUEST');
+  if (env.INPUT_VERSION !== config.version || env.INPUT_SOURCE_SHA !== config.sourceSha) throw new ImportError('INVALID_SIGNING_REQUEST');
+  const workDir = await checkedWorkDir(env.INPUT_WORK_DIR, product, runId, env);
   if (!workDir) throw new ImportError('INVALID_TEMP_DIR');
-  const apiKey = process.env.SIGNING_API_KEY;
+  const apiKey = env.SIGNING_API_KEY;
   if (!apiKey) throw new ImportError('SIGNING_API_KEY_UNAVAILABLE');
+  const file = path.join(workDir, BUNDLE_NAME);
+  const info = await stat(file).catch(() => null);
+  if (!info?.isFile()) throw new ImportError('INVALID_SIGNING_REQUEST');
+  const bundle = await bundleDigest(file);
+  if (bundle.size < 1) throw new ImportError('INVALID_SIGNING_REQUEST');
   const body = {
     project_id: `import-${product}`,
     platform: 'macos',
     execution_visibility: 'public',
     run_id: Number(runId),
     run_attempt: 1,
-    artifact_id: Number(artifactId),
+    input_digest: bundle.digest,
+    input_size: bundle.size,
     version: config.version,
-    source_sha: process.env.INPUT_SOURCE_SHA,
+    source_sha: config.sourceSha,
   };
   const idempotencyKey = `import-${product}-${runId}-1`;
   if (idempotencyKey.length < 16 || idempotencyKey.length > 160) throw new ImportError('INVALID_SIGNING_REQUEST');
-  let response;
-  try {
-    response = await fetch(SIGN_ENDPOINT, {
-      method: 'POST',
-      redirect: 'error',
-      headers: { authorization: `Bearer ${apiKey}`, 'content-type': 'application/json', accept: 'application/json', 'idempotency-key': idempotencyKey },
-      body: JSON.stringify(body),
-      signal: AbortSignal.timeout(30_000),
-    });
-  } catch { throw new ImportError('SIGNING_REQUEST_FAILED'); }
-  if (!response.ok) throw new ImportError('SIGNING_REQUEST_FAILED');
-  const result = await jsonResponse(response);
-  if (result.state !== 'accepted_waiting_source') throw new ImportError('SIGNING_REQUEST_FAILED');
+  const created = await centerJson(fetchImpl, SIGN_ENDPOINT, 'POST', apiKey, body, { 'idempotency-key': idempotencyKey });
+  if (typeof created.request_id !== 'string' || !UUID.test(created.request_id)) throw new ImportError('SIGNING_REQUEST_FAILED');
+  if (created.state === 'accepted_waiting_source') return;
+  if (created.state !== 'awaiting_upload') throw new ImportError('SIGNING_REQUEST_FAILED');
+  const base = `${SIGN_ENDPOINT}/${created.request_id}`;
+  await uploadParts(fetchImpl, sleep, base, apiKey, file, bundle);
+  const completed = await centerJson(fetchImpl, `${base}/source/complete`, 'POST', apiKey, {});
+  if (completed.state !== 'accepted_waiting_source') throw new ImportError('SIGNING_REQUEST_FAILED');
 }
 
 async function cleanup() {
@@ -334,7 +404,7 @@ export async function main(args = process.argv.slice(2)) {
   try {
     if (args.length !== 1 || !['prepare', 'submit', 'cleanup'].includes(args[0])) throw new ImportError('INVALID_COMMAND');
     if (args[0] === 'prepare') await prepare();
-    else if (args[0] === 'submit') await submit();
+    else if (args[0] === 'submit') await submitSource();
     else await cleanup();
   } catch (error) {
     process.stderr.write(`${error instanceof ImportError ? error.code : 'IMPORT_FAILED'}\n`);

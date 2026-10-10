@@ -44,23 +44,9 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
         run: node scripts/import-macos.mjs prepare
 
-      - name: Upload unsigned signing inputs
-        id: upload
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
-        with:
-          name: unsigned-macos-${{ inputs.product }}
-          path: |
-            ${{ steps.prepare.outputs.output_dir }}/unsigned.tar.gz
-            ${{ steps.prepare.outputs.output_dir }}/template.dmg
-            ${{ steps.prepare.outputs.output_dir }}/source.json
-          retention-days: 7
-          compression-level: 0
-          if-no-files-found: error
-
       - name: Register signing request
         env:
           SIGNING_API_KEY: ${{ secrets.SIGNING_API_KEY }}
-          INPUT_ARTIFACT_ID: ${{ steps.upload.outputs.artifact-id }}
           INPUT_VERSION: ${{ steps.prepare.outputs.version }}
           INPUT_SOURCE_SHA: ${{ steps.prepare.outputs.source_sha }}
           INPUT_WORK_DIR: ${{ steps.prepare.outputs.work_dir }}
