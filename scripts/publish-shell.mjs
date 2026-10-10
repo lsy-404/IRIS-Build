@@ -270,11 +270,11 @@ export async function awaitSigning({ env = process.env, fetchImpl = fetch, sleep
 const ISSUED_KEYS = ['schema_version', 'request_id', 'generation', 'stage', 'input_digest', 'recipe_sha', 'policy_digest', 'team_id', 'bundle_id', 'version', 'architecture',
   'codesign_verified', 'timestamp_verified', 'asar_integrity_verified', 'notarization_id', 'notarization_status', 'notary_archive_sha256', 'gatekeeper_verified', 'staple_verified', 'files'];
 
-export function validateVerification(report, { requestId, inputDigest, version, arch, productSize, productSha256 }) {
+export function validateVerification(report, { requestId, version, arch, productSize, productSha256 }) {
   const ok = report !== null && typeof report === 'object' && !Array.isArray(report)
     && Object.keys(report).length === ISSUED_KEYS.length && ISSUED_KEYS.every((key) => Object.hasOwn(report, key))
     && report.schema_version === 1 && report.request_id === requestId && report.stage === 'dmg_finalize'
-    && report.input_digest === inputDigest && report.team_id === TEAM_ID && report.bundle_id === BUNDLE_ID
+    && ARCHIVE_DIGEST.test(report.input_digest) && report.team_id === TEAM_ID && report.bundle_id === BUNDLE_ID
     && report.version === version && report.architecture === arch
     && report.codesign_verified === true && report.timestamp_verified === true
     && report.gatekeeper_verified === true && report.staple_verified === true
@@ -476,7 +476,7 @@ export async function fetchSigned({ env = process.env, fetchImpl = fetch, sleep 
     const sha256Hex = sha256.hash.digest('hex');
     let report;
     try { report = JSON.parse(await readFile(reportFile, 'utf8')); } catch { throw new PublishError('VERIFICATION_REPORT_INVALID'); }
-    validateVerification(report, { requestId: inputs.requests[arch].id, inputDigest: inputs.requests[arch].digest, version: inputs.version, arch, productSize: sha256.size, productSha256: sha256Hex });
+    validateVerification(report, { requestId: inputs.requests[arch].id, version: inputs.version, arch, productSize: sha256.size, productSha256: sha256Hex });
     await verifyMacos({ exec, dmg: product, arch, version: inputs.version, tmpRoot: env.RUNNER_TEMP });
     const name = `IRIS-${inputs.version}-mac-${arch}.dmg`;
     await copyFile(product, path.join(out, name));

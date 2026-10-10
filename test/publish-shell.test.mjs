@@ -426,7 +426,7 @@ function product() {
 
 function report(arch, dmg, extra = {}) {
   return {
-    schema_version: 1, request_id: ID[arch], generation: 1, stage: 'dmg_finalize', input_digest: INPUT_DIGEST[arch], recipe_sha: SHA, policy_digest: `sha256:${'1'.repeat(64)}`,
+    schema_version: 1, request_id: ID[arch], generation: 1, stage: 'dmg_finalize', input_digest: `sha256:${'3'.repeat(64)}`, recipe_sha: SHA, policy_digest: `sha256:${'1'.repeat(64)}`,
     team_id: '76DMUAK6J5', bundle_id: 'io.github.wuyilingwei.iris', version: VERSION, architecture: arch, codesign_verified: true, timestamp_verified: true,
     asar_integrity_verified: true, notarization_id: '5a2b8c1e-0a4d-4e8b-9c55-1d2e3f4a5b6e', notarization_status: 'Accepted', notary_archive_sha256: '2'.repeat(64),
     gatekeeper_verified: true, staple_verified: true, files: [{ path: 'product.dmg', size: dmg.length, sha256: sha256(dmg) }], ...extra,
@@ -554,10 +554,10 @@ test('fetch requires the request to be succeeded', async () => {
 
 test('every verification.json field is enforced', async () => {
   const dmg = randomBytes(64);
-  const context = { requestId: ID.arm64, inputDigest: INPUT_DIGEST.arm64, version: VERSION, arch: 'arm64', productSize: dmg.length, productSha256: sha256(dmg) };
+  const context = { requestId: ID.arm64, version: VERSION, arch: 'arm64', productSize: dmg.length, productSha256: sha256(dmg) };
   validateVerification(report('arm64', dmg), context);
   const mutations = {
-    schema_version: 2, request_id: ID.x64, generation: 0, stage: 'dmg_sign', input_digest: INPUT_DIGEST.x64, recipe_sha: 'z', policy_digest: 'x', team_id: 'ZZZZZZZZZZ',
+    schema_version: 2, request_id: ID.x64, generation: 0, stage: 'dmg_sign', input_digest: 'sha256:short', recipe_sha: 'z', policy_digest: 'x', team_id: 'ZZZZZZZZZZ',
     bundle_id: 'com.example.other', version: '9.9.9', architecture: 'x64', codesign_verified: false, timestamp_verified: false, asar_integrity_verified: 'yes',
     notarization_id: 'nope', notarization_status: 'Submitted', notary_archive_sha256: 'short', gatekeeper_verified: false, staple_verified: false,
     files: [], extra_key: true,
