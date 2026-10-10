@@ -8,7 +8,7 @@ import { submitSource } from '../scripts/import-macos.mjs';
 
 const PART = 5 * 1024 * 1024;
 const ID = '3f2b8c1e-0a4d-4e8b-9c55-1d2e3f4a5b6c';
-const SHA = 'f6d90bce8063a8c84d715f0950faa5a0fb805538';
+const SHA = 'a5237f77558b8e32886ba4ea0cca90c8c416520c';
 
 async function fixture(size) {
   const temp = await mkdtemp(path.join(os.tmpdir(), 'import-test-'));
@@ -19,7 +19,7 @@ async function fixture(size) {
   await writeFile(path.join(workDir, 'source.zip'), bytes);
   const env = {
     RUNNER_TEMP: temp, INPUT_PRODUCT: 'iris-arm64', GITHUB_RUN_ID: '77', GITHUB_RUN_ATTEMPT: '1',
-    INPUT_VERSION: '0.5.80', INPUT_SOURCE_SHA: SHA, INPUT_WORK_DIR: workDir, SIGNING_API_KEY: 'test-key',
+    INPUT_VERSION: '0.5.83', INPUT_SOURCE_SHA: SHA, INPUT_WORK_DIR: workDir, SIGNING_API_KEY: 'test-key',
   };
   return { env, bytes };
 }

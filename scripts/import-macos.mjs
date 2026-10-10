@@ -22,26 +22,26 @@ const MAX_JSON_BYTES = 1_000_000;
 const products = Object.freeze({
   'iris-arm64': {
     repository: IRIS_BUILD,
-    assetId: 623425708,
-    assetName: 'IRIS-0.5.80-mac-arm64.dmg',
-    assetSize: 169_998_705,
-    assetDigest: 'sha256:e16b613e9c3d39482603fe02ea3d0475add686d67f0fac169fc5a8f686e893fc',
-    version: '0.5.80',
+    assetId: 627138897,
+    assetName: 'IRIS-0.5.83-mac-arm64.dmg',
+    assetSize: 168_172_512,
+    assetDigest: 'sha256:2c0d90611509a514d4745c9097580bc1f5f6b1f8f3d98870ea45d7a9a425063e',
+    version: '0.5.83',
     source: 'build-info',
-    sourceSha: 'f6d90bce8063a8c84d715f0950faa5a0fb805538',
+    sourceSha: 'a5237f77558b8e32886ba4ea0cca90c8c416520c',
     architecture: 'arm64',
     appName: 'IRIS.app',
     bundleId: 'io.github.wuyilingwei.iris',
   },
   'iris-x64': {
     repository: IRIS_BUILD,
-    assetId: 623425709,
-    assetName: 'IRIS-0.5.80-mac-x64.dmg',
-    assetSize: 177_291_721,
-    assetDigest: 'sha256:9d70b0d33cc7c2e5c9adc818fa7d86ada860b3c91465d98150b94789911f2c11',
-    version: '0.5.80',
+    assetId: 627138896,
+    assetName: 'IRIS-0.5.83-mac-x64.dmg',
+    assetSize: 175_467_497,
+    assetDigest: 'sha256:7d8621713573ec31e41822e557e0d9ddaf7d4ff60230a322b36e8a3479236093',
+    version: '0.5.83',
     source: 'build-info',
-    sourceSha: 'f6d90bce8063a8c84d715f0950faa5a0fb805538',
+    sourceSha: 'a5237f77558b8e32886ba4ea0cca90c8c416520c',
     architecture: 'x64',
     appName: 'IRIS.app',
     bundleId: 'io.github.wuyilingwei.iris',
@@ -149,17 +149,17 @@ async function resolveSourceSha(config, workDir, token) {
   if (config.source === 'build-info') {
     const buildInfo = {
       repository: IRIS_BUILD,
-      assetId: 623426004,
+      assetId: 627144226,
       assetName: 'build-info.json',
       assetSize: 148,
-      assetDigest: 'sha256:6d33929256793cdeb75a360dccececeb3c677fa7373393e8643357561a408104',
+      assetDigest: 'sha256:d70b30f6f4946012ed4f05d032e2ddca07132b9b75119dea5eb0b7065f37920f',
     };
     await assetMetadata(buildInfo, token);
     const file = path.join(workDir, 'build-info.json');
     await downloadAsset(buildInfo, token, file);
     const info = JSON.parse(await readFile(file, 'utf8'));
     await rm(file, { force: true });
-    if (info.dirty !== false || info.coreVersion !== '26.1009.0' || !/^[a-f0-9]{40}$/.test(info.commit ?? '') || info.commit !== 'f6d90bce8063a8c84d715f0950faa5a0fb805538') throw new ImportError('BUILD_INFO_MISMATCH');
+    if (info.dirty !== false || info.coreVersion !== '26.1010.5' || !/^[a-f0-9]{40}$/.test(info.commit ?? '') || info.commit !== 'a5237f77558b8e32886ba4ea0cca90c8c416520c') throw new ImportError('BUILD_INFO_MISMATCH');
     return info.commit;
   }
   if (config.source === 'tag') {
