@@ -63,7 +63,7 @@ const products = Object.freeze({
 });
 
 class ImportError extends Error {
-  constructor(code) { super(code); this.code = code; }
+  constructor(code, transient = false) { super(code); this.code = code; this.transient = transient; }
 }
 
 function productConfig(product) {
@@ -299,7 +299,7 @@ async function bundleDigest(file) {
 
 const defaultSleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-async function centerJson(fetchImpl, url, method, apiKey, body, extraHeaders = {}) {
+async function centerJson(fetchImpl, url, method, apiKey, body, extraHeaders = {}, timeoutMs = 30_000) {
   let response;
   try {
     response = await fetchImpl(url, {
@@ -307,11 +307,22 @@ async function centerJson(fetchImpl, url, method, apiKey, body, extraHeaders = {
       redirect: 'error',
       headers: { authorization: `Bearer ${apiKey}`, 'content-type': 'application/json', accept: 'application/json', ...extraHeaders },
       body: JSON.stringify(body),
-      signal: AbortSignal.timeout(30_000),
+      signal: AbortSignal.timeout(timeoutMs),
     });
-  } catch { throw new ImportError('SIGNING_REQUEST_FAILED'); }
-  if (!response.ok) throw new ImportError('SIGNING_REQUEST_FAILED');
+  } catch { throw new ImportError('SIGNING_REQUEST_FAILED', true); }
+  if (!response.ok) throw new ImportError('SIGNING_REQUEST_FAILED', response.status >= 500 || response.status === 408 || response.status === 429);
   return jsonResponse(response);
+}
+
+// The center answers the plan and complete calls idempotently, so a lost or slow response can be asked for again.
+async function centerRetry(sleep, call) {
+  for (let attempt = 1; ; attempt += 1) {
+    try { return await call(); }
+    catch (error) {
+      if (!(error instanceof ImportError) || !error.transient || attempt >= PART_ATTEMPTS) throw error;
+      await sleep(2000 * 2 ** (attempt - 1));
+    }
+  }
 }
 
 function validateUploadPlan(plan, bundle) {
@@ -336,7 +347,8 @@ async function putPart(fetchImpl, url, apiKey, file, start, length) {
 }
 
 async function uploadParts(fetchImpl, sleep, base, apiKey, file, bundle) {
-  let plan = validateUploadPlan(await centerJson(fetchImpl, `${base}/source`, 'POST', apiKey, {}), bundle);
+  const fetchPlan = async () => validateUploadPlan(await centerRetry(sleep, () => centerJson(fetchImpl, `${base}/source`, 'POST', apiKey, {})), bundle);
+  let plan = await fetchPlan();
   for (let part = 1; part <= plan.part_count; part += 1) {
     if (plan.received_parts.includes(part)) continue;
     const start = (part - 1) * plan.part_size;
@@ -348,7 +360,7 @@ async function uploadParts(fetchImpl, sleep, base, apiKey, file, bundle) {
       const transient = status === 0 || status >= 500 || status === 408 || status === 429;
       if (!transient || attempt >= PART_ATTEMPTS) throw new ImportError('SOURCE_UPLOAD_FAILED');
       await sleep(2000 * 2 ** (attempt - 1));
-      plan = validateUploadPlan(await centerJson(fetchImpl, `${base}/source`, 'POST', apiKey, {}), bundle);
+      plan = await fetchPlan();
       if (plan.received_parts.includes(part)) break;
     }
   }
@@ -388,7 +400,7 @@ export async function submitSource({ fetchImpl = fetch, env = process.env, sleep
   if (created.state !== 'awaiting_upload') throw new ImportError('SIGNING_REQUEST_FAILED');
   const base = `${SIGN_ENDPOINT}/${created.request_id}`;
   await uploadParts(fetchImpl, sleep, base, apiKey, file, bundle);
-  const completed = await centerJson(fetchImpl, `${base}/source/complete`, 'POST', apiKey, {});
+  const completed = await centerRetry(sleep, () => centerJson(fetchImpl, `${base}/source/complete`, 'POST', apiKey, {}, {}, 300_000));
   if (completed.state !== 'accepted_waiting_source') throw new ImportError('SIGNING_REQUEST_FAILED');
 }
 

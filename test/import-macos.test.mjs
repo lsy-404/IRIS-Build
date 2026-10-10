@@ -34,7 +34,7 @@ async function drain(stream) {
   return Buffer.concat(chunks);
 }
 
-function center({ size, createState = 'awaiting_upload', received = [], failParts = [], completeState = 'accepted_waiting_source', requestId = ID }) {
+function center({ size, createState = 'awaiting_upload', received = [], failParts = [], completeState = 'accepted_waiting_source', requestId = ID, completeFailures = [], beginFailures = [] }) {
   const log = { create: null, createHeaders: null, parts: [], begins: 0, completes: 0, urls: [], options: [] };
   const have = new Set(received);
   const failures = new Map(failParts.map(([part, status]) => [part, status]));
@@ -50,6 +50,7 @@ function center({ size, createState = 'awaiting_upload', received = [], failPart
     }
     if (url === `https://sign.voidcarve.com/v1/requests/${requestId}/source`) {
       log.begins += 1;
+      if (beginFailures.length) return new Response(null, { status: beginFailures.shift() });
       return json(200, { part_size: PART, part_count: count, received_parts: [...have].sort((a, b) => a - b) });
     }
     const part = url.match(/\/source\/parts\/(\d+)$/);
@@ -65,6 +66,7 @@ function center({ size, createState = 'awaiting_upload', received = [], failPart
     }
     if (url.endsWith('/source/complete')) {
       log.completes += 1;
+      if (completeFailures.length) return new Response(null, { status: completeFailures.shift() });
       return json(200, { request_id: requestId, state: completeState });
     }
     throw new Error(`unexpected ${url}`);
@@ -115,6 +117,32 @@ test('a non-transient part failure aborts without completing', async () => {
   const { fetchImpl, log } = center({ size: bytes.length, failParts: [[1, 403]] });
   await assert.rejects(submitSource({ fetchImpl, env, sleep: noSleep }), { code: 'SOURCE_UPLOAD_FAILED' });
   assert.equal(log.completes, 0);
+});
+
+test('retries source/complete on transient failures and allows it the long timeout', async () => {
+  const { env, bytes } = await fixture(PART + 3);
+  const { fetchImpl, log } = center({ size: bytes.length, completeFailures: [503, 429] });
+  const timeouts = [];
+  const original = AbortSignal.timeout;
+  AbortSignal.timeout = (ms) => { timeouts.push(ms); return original.call(AbortSignal, ms); };
+  try { await submitSource({ fetchImpl, env, sleep: noSleep }); } finally { AbortSignal.timeout = original; }
+  assert.equal(log.completes, 3);
+  assert.ok(timeouts.includes(300_000));
+});
+
+test('a non-transient source/complete failure is not retried', async () => {
+  const { env, bytes } = await fixture(PART + 3);
+  const { fetchImpl, log } = center({ size: bytes.length, completeFailures: [422] });
+  await assert.rejects(submitSource({ fetchImpl, env, sleep: noSleep }), { code: 'SIGNING_REQUEST_FAILED' });
+  assert.equal(log.completes, 1);
+});
+
+test('retries a transient failure of the upload plan request', async () => {
+  const { env, bytes } = await fixture(PART + 3);
+  const { fetchImpl, log } = center({ size: bytes.length, beginFailures: [502] });
+  await submitSource({ fetchImpl, env, sleep: noSleep });
+  assert.equal(log.begins, 2);
+  assert.equal(log.completes, 1);
 });
 
 test('rejects a request id that is not a UUID', async () => {
