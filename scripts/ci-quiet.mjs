@@ -31,14 +31,16 @@ async function reportFailure(logPath, status) {
   try {
     const raw = await readFile(logPath, 'utf8');
     const summary = `CI command failed with exit code ${status}.\n${redact(raw).slice(-REPORT_LIMIT)}`;
-    await fetch(endpoint, {
+    const response = await fetch(endpoint, {
       method: 'POST',
       headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ run_id: runId, status: 'failed', exit_code: status, summary }),
       signal: AbortSignal.timeout(10_000),
     });
+    await response.body?.cancel();
+    if (!response.ok) process.stderr.write(`CI_REPORT_FAILED_${response.status}\n`);
   } catch {
-    // Reporting must not replace the command result or expose its output.
+    process.stderr.write('CI_REPORT_UNAVAILABLE\n');
   }
 }
 

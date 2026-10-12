@@ -28,7 +28,7 @@ test('successful commands expose only the success code', async () => {
   assert.deepEqual(result, { code: 0, stdout: 'CI_STEP_OK\n', stderr: '' });
 });
 
-test('failed output and workflow commands go only to the private report', async (t) => {
+for (const reportStatus of [201, 403]) test(`failed output stays private when reporting returns ${reportStatus}`, async (t) => {
   let report;
   const server = createServer((request, response) => {
     let body = '';
@@ -36,7 +36,7 @@ test('failed output and workflow commands go only to the private report', async 
     request.on('data', (chunk) => { body += chunk; });
     request.on('end', () => {
       report = { authorization: request.headers.authorization, body: JSON.parse(body) };
-      response.writeHead(201).end();
+      response.writeHead(reportStatus).end();
     });
   });
   server.listen(0, '127.0.0.1');
@@ -56,7 +56,7 @@ test('failed output and workflow commands go only to the private report', async 
 
   assert.equal(result.code, 17);
   assert.equal(result.stdout, 'CI_STEP_FAILED_17\n');
-  assert.equal(result.stderr, '');
+  assert.equal(result.stderr, reportStatus === 201 ? '' : 'CI_REPORT_FAILED_403\n');
   assert.equal(report.authorization, 'Bearer private-token');
   assert.equal(report.body.run_id, '12345');
   assert.equal(report.body.status, 'failed');
