@@ -1,0 +1,422 @@
+name: IRIS CI
+
+on:
+  repository_dispatch:
+    types: [iris-build]
+  schedule:
+    - cron: '17 7 * * *'
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Exact 40-character commit in lsy-404/IRIS
+        required: true
+        type: string
+      nativeOnly:
+        description: Run only Windows native control verification
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+env:
+  WORKFLOW_REPORT_API: https://iris.voidcarve.com/api/v1/internal/workflow-reports
+  WORKFLOW_REPORT_TOKEN: ${{ secrets.IRIS_RELEASE_UPLOAD_TOKEN }}
+
+jobs:
+  resolve:
+    if: >-
+      github.ref == format('refs/heads/{0}', github.event.repository.default_branch) &&
+      (github.event_name != 'repository_dispatch' || github.event.client_payload.build_kind == 'core')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      source_sha: ${{ steps.source.outputs.source_sha }}
+      native_only: ${{ steps.source.outputs.native_only }}
+      property_runs: ${{ steps.source.outputs.property_runs }}
+    steps:
+      - name: Checkout trusted CI tools
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: ${{ github.sha }}
+          path: .ci-tools
+          persist-credentials: false
+      - name: Move trusted tools to runner temp
+        run: mv .ci-tools "$RUNNER_TEMP/iris-build-tools"
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - name: Check quiet command contract
+        run: node "$RUNNER_TEMP/iris-build-tools/scripts/ci-quiet.mjs" -- node --test "$RUNNER_TEMP/iris-build-tools/test/ci-quiet.test.mjs"
+      - name: Checkout private main for scheduled run
+        if: github.event_name == 'schedule'
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          repository: lsy-404/IRIS
+          ref: main
+          path: iris-scheduled-source
+          ssh-key: ${{ secrets.IRIS_BUILD_DEPLOY_KEY }}
+          persist-credentials: false
+      - name: Resolve private source SHA
+        id: source
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_KIND: ${{ github.event.client_payload.build_kind }}
+          EVENT_SOURCE_SHA: ${{ github.event.client_payload.source_sha }}
+          INPUT_SOURCE_SHA: ${{ inputs.source_sha }}
+          INPUT_NATIVE_ONLY: ${{ inputs.nativeOnly }}
+        run: |
+          set -euo pipefail
+          if [[ "$EVENT_NAME" == schedule ]]; then
+            source_sha="$(git -C iris-scheduled-source rev-parse HEAD)"
+          elif [[ "$EVENT_NAME" == repository_dispatch ]]; then
+            [[ "$EVENT_KIND" == core ]] || exit 1
+            source_sha="$EVENT_SOURCE_SHA"
+          else
+            source_sha="$INPUT_SOURCE_SHA"
+          fi
+          [[ "$source_sha" =~ ^[0-9a-fA-F]{40}$ ]] || exit 1
+          source_sha="${source_sha,,}"
+          native_only=false
+          [[ "$INPUT_NATIVE_ONLY" == true ]] && native_only=true
+          property_runs=100
+          [[ "$EVENT_NAME" == schedule ]] && property_runs=1000
+          printf 'source_sha=%s\nnative_only=%s\nproperty_runs=%s\n' "$source_sha" "$native_only" "$property_runs" >> "$GITHUB_OUTPUT"
+
+  verify:
+    needs: resolve
+    if: needs.resolve.outputs.native_only != 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      IRIS_PROPERTY_RUNS: ${{ needs.resolve.outputs.property_runs }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: ${{ github.sha }}
+          path: .ci-tools
+          persist-credentials: false
+      - run: mv .ci-tools "$RUNNER_TEMP/iris-build-tools"
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          repository: lsy-404/IRIS
+          ref: ${{ needs.resolve.outputs.source_sha }}
+          path: iris-source
+          ssh-key: ${{ secrets.IRIS_BUILD_DEPLOY_KEY }}
+          persist-credentials: false
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.34.6
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: iris-source/pnpm-lock.yaml
+      - name: Install dependencies
+        working-directory: iris-source
+        run: node "$RUNNER_TEMP/iris-build-tools/scripts/ci-quiet.mjs" -- pnpm install --frozen-lockfile
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install Linux musl target and linker
+        working-directory: iris-source
+        run: node "$RUNNER_TEMP/iris-build-tools/scripts/ci-quiet.mjs" -- bash -e -c 'rustup target add x86_64-unknown-linux-musl && sudo apt-get update && sudo apt-get install -y musl-tools'
+      - name: Test and build the notification reader
+        working-directory: iris-source
+        run: node "$RUNNER_TEMP/iris-build-tools/scripts/ci-quiet.mjs" -- bash -e -c 'cargo test --locked --manifest-path native/notification-reader/Cargo.toml && pnpm run build:native:notification-reader && pnpm run digest:native:notification-reader'
+      - name: Configure Electron sandbox for Linux tests
+        working-directory: iris-source
+        run: node "$RUNNER_TEMP/iris-build-tools/scripts/ci-quiet.mjs" -- bash -e -c 'sudo chown root:root node_modules/electron/dist/chrome-sandbox && sudo chmod 4755 node_modules/electron/dist/chrome-sandbox'
+      - name: Typecheck and lint
+        working-directory: iris-source
+        run: node "$RUNNER_TEMP/iris-build-tools/scripts/ci-quiet.mjs" -- bash -e -c 'pnpm run typecheck && pnpm run lint'
+      - name: Check repository contracts
+        working-directory: iris-source
+        run: node "$RUNNER_TEMP/iris-build-tools/scripts/ci-quiet.mjs" -- bash -e -c 'pnpm run filter-stock && pnpm run no-window-tests && pnpm run tasks-write-scan'
+      - name: Run contracts and journeys
+        working-directory: iris-source
+        run: node "$RUNNER_TEMP/iris-build-tools/scripts/ci-quiet.mjs" -- dbus-run-session -- xvfb-run -a pnpm run test:full --concurrency=1
+      - name: Check fake-backend request shapes
+        working-directory: iris-source
+        run: node "$RUNNER_TEMP/iris-build-tools/scripts/ci-quiet.mjs" -- node scripts/run-tests.mjs --concurrency=1 test/perf
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: linux-x64-notification-reader
+          path: iris-source/build/native/notification-reader
+          retention-days: 1
+
+  windows:
+    needs: resolve
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: ${{ github.sha }}
+          path: .ci-tools
+          persist-credentials: false
+      - name: Move trusted tools to runner temp
+        run: Move-Item .ci-tools "$env:RUNNER_TEMP/iris-build-tools"
+        shell: pwsh
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          repository: lsy-404/IRIS
+          ref: ${{ needs.resolve.outputs.source_sha }}
+          path: iris-source
+          ssh-key: ${{ secrets.IRIS_BUILD_DEPLOY_KEY }}
+          persist-credentials: false
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.34.6
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: iris-source/pnpm-lock.yaml
+      - name: Install dependencies
+        working-directory: iris-source
+        run: node "$env:RUNNER_TEMP/iris-build-tools/scripts/ci-quiet.mjs" -- pnpm install --frozen-lockfile
+        shell: pwsh
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Test and build the notification reader
+        working-directory: iris-source
+        run: node "$env:RUNNER_TEMP/iris-build-tools/scripts/ci-quiet.mjs" -- pwsh -NoProfile -Command "cargo test --locked --manifest-path native/notification-reader/Cargo.toml; if (`$LASTEXITCODE -ne 0) { exit `$LASTEXITCODE }; pnpm run build:native:notification-reader; if (`$LASTEXITCODE -ne 0) { exit `$LASTEXITCODE }; pnpm run digest:native:notification-reader; exit `$LASTEXITCODE"
+        shell: pwsh
+      - name: Build isolated desktop helper and fixture
+        working-directory: iris-source
+        run: node "$env:RUNNER_TEMP/iris-build-tools/scripts/ci-quiet.mjs" -- pnpm run build:native:computer-use
+        shell: pwsh
+      - name: Restore the pinned release helper before checking its digest
+        working-directory: iris-source
+        run: node "$env:RUNNER_TEMP/iris-build-tools/scripts/ci-quiet.mjs" -- git restore -- native/computer-use-windows/prebuilt
+        shell: pwsh
+      - name: Build main process
+        working-directory: iris-source
+        run: node "$env:RUNNER_TEMP/iris-build-tools/scripts/ci-quiet.mjs" -- pnpm run build:main
+        shell: pwsh
+      - name: Confirm isolation contract rejects the ordinary helper
+        if: inputs.nativeOnly
+        working-directory: iris-source
+        shell: pwsh
+        run: |
+          $scriptPath = Join-Path $env:RUNNER_TEMP 'iris-ci-isolation.ps1'
+          @'
+          $env:IRIS_CU_NATIVE_BASELINE = (Resolve-Path "node_modules/@injaneity/pi-computer-use/prebuilt/windows/windows-bridge.exe").Path
+          node scripts/run-tests.mjs --concurrency=1 test/contract/laws/containment.law.test.cjs -- --test-name-pattern="native desktop"
+          if ($LASTEXITCODE -eq 0) { throw "Isolation contract accepted the ordinary helper" }
+          Remove-Item Env:IRIS_CU_NATIVE_BASELINE
+          exit 0
+          '@ | Set-Content -LiteralPath $scriptPath
+          node "$env:RUNNER_TEMP/iris-build-tools/scripts/ci-quiet.mjs" -- pwsh -NoProfile -File $scriptPath
+      - name: Run Windows contracts and release journeys
+        if: ${{ needs.resolve.outputs.native_only != 'true' }}
+        working-directory: iris-source
+        run: node "$env:RUNNER_TEMP/iris-build-tools/scripts/ci-quiet.mjs" -- pnpm run test:windows
+        shell: pwsh
+      - name: Run Windows native desktop contracts
+        if: inputs.nativeOnly
+        working-directory: iris-source
+        run: node "$env:RUNNER_TEMP/iris-build-tools/scripts/ci-quiet.mjs" -- node scripts/run-tests.mjs --concurrency=1 test/contract/laws/containment.law.test.cjs -- --test-name-pattern="native desktop"
+        shell: pwsh
+      - name: Confirm the capture deadline contract rejects an unbounded worker
+        if: inputs.nativeOnly
+        working-directory: iris-source
+        shell: pwsh
+        run: |
+          $scriptPath = Join-Path $env:RUNNER_TEMP 'iris-ci-capture-deadline.ps1'
+          @'
+          $source = "build/computer-use-windows/src/desktop.rs"
+          $original = Get-Content $source -Raw
+          $deadline = [regex]::Match($original, 'Instant::now\(\) \+ Duration::from_secs\((\d+)\)')
+          if (-not $deadline.Success) { throw "Capture deadline declaration is missing" }
+          $mutation = $original.Replace($deadline.Value, "Instant::now() + Duration::from_secs($([int]$deadline.Groups[1].Value * 10))")
+          if ($mutation -eq $original) { throw "Capture deadline mutation did not apply" }
+          try {
+            Set-Content $source $mutation -NoNewline
+            cargo build --locked --release --bin windows-bridge --manifest-path build/computer-use-windows/Cargo.toml
+            if ($LASTEXITCODE -ne 0) { throw "Capture deadline mutation did not compile" }
+            $env:IRIS_CU_NATIVE_CAPTURE_TIMEOUT_MUTATION = (Resolve-Path "build/computer-use-windows/target/release/windows-bridge.exe").Path
+            node scripts/run-tests.mjs --concurrency=1 test/contract/laws/containment.law.test.cjs -- --test-name-pattern="native desktop"
+            if ($LASTEXITCODE -eq 0) { throw "Capture deadline contract accepted the unbounded worker" }
+          } finally {
+            Remove-Item Env:IRIS_CU_NATIVE_CAPTURE_TIMEOUT_MUTATION -ErrorAction SilentlyContinue
+            Set-Content $source $original -NoNewline
+          }
+          exit 0
+          '@ | Set-Content -LiteralPath $scriptPath
+          node "$env:RUNNER_TEMP/iris-build-tools/scripts/ci-quiet.mjs" -- pwsh -NoProfile -File $scriptPath
+      - name: Upload production notification reader
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: windows-x64-notification-reader
+          path: iris-source/build/native/notification-reader
+          retention-days: 1
+
+  native-macos:
+    needs: resolve
+    if: needs.resolve.outputs.native_only != 'true'
+    runs-on: macos-14
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: ${{ github.sha }}
+          path: .ci-tools
+          persist-credentials: false
+      - run: mv .ci-tools "$RUNNER_TEMP/iris-build-tools"
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          repository: lsy-404/IRIS
+          ref: ${{ needs.resolve.outputs.source_sha }}
+          path: iris-source
+          ssh-key: ${{ secrets.IRIS_BUILD_DEPLOY_KEY }}
+          persist-credentials: false
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.34.6
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: iris-source/pnpm-lock.yaml
+      - name: Install dependencies
+        working-directory: iris-source
+        run: node "$RUNNER_TEMP/iris-build-tools/scripts/ci-quiet.mjs" -- pnpm install --frozen-lockfile
+      - name: Build and test notification reader
+        working-directory: iris-source
+        run: node "$RUNNER_TEMP/iris-build-tools/scripts/ci-quiet.mjs" -- bash -e -c 'pnpm run build:native:notification-reader && pnpm run digest:native:notification-reader && pnpm run build:main && node scripts/run-tests.mjs --concurrency=1 test/contract/registry/notification-assets.contract.test.cjs test/flow/notification-reader.flow.test.cjs'
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: macos-notification-reader
+          path: iris-source/build/native/notification-reader
+          retention-days: 1
+
+  native-linux-arm64:
+    needs: resolve
+    if: needs.resolve.outputs.native_only != 'true'
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: ${{ github.sha }}
+          path: .ci-tools
+          persist-credentials: false
+      - run: mv .ci-tools "$RUNNER_TEMP/iris-build-tools"
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          repository: lsy-404/IRIS
+          ref: ${{ needs.resolve.outputs.source_sha }}
+          path: iris-source
+          ssh-key: ${{ secrets.IRIS_BUILD_DEPLOY_KEY }}
+          persist-credentials: false
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.34.6
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: iris-source/pnpm-lock.yaml
+      - name: Install dependencies
+        working-directory: iris-source
+        run: node "$RUNNER_TEMP/iris-build-tools/scripts/ci-quiet.mjs" -- pnpm install --frozen-lockfile
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install Linux musl target and linker
+        working-directory: iris-source
+        run: node "$RUNNER_TEMP/iris-build-tools/scripts/ci-quiet.mjs" -- bash -e -c 'rustup target add aarch64-unknown-linux-musl && sudo apt-get update && sudo apt-get install -y musl-tools'
+      - name: Build and test notification reader
+        working-directory: iris-source
+        run: node "$RUNNER_TEMP/iris-build-tools/scripts/ci-quiet.mjs" -- bash -e -c 'cargo test --locked --manifest-path native/notification-reader/Cargo.toml && node scripts/native-notification-reader.mjs build && node scripts/native-notification-reader.mjs digest && pnpm run build:main && node scripts/run-tests.mjs --concurrency=1 test/contract/registry/notification-assets.contract.test.cjs test/flow/notification-reader.flow.test.cjs'
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: linux-arm64-notification-reader
+          path: iris-source/build/native/notification-reader
+          retention-days: 1
+
+  notification-core-payload:
+    needs: [resolve, verify, windows, native-macos, native-linux-arm64]
+    if: needs.resolve.outputs.native_only != 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: ${{ github.sha }}
+          path: .ci-tools
+          persist-credentials: false
+      - run: mv .ci-tools "$RUNNER_TEMP/iris-build-tools"
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          repository: lsy-404/IRIS
+          ref: ${{ needs.resolve.outputs.source_sha }}
+          path: iris-source
+          ssh-key: ${{ secrets.IRIS_BUILD_DEPLOY_KEY }}
+          persist-credentials: false
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.34.6
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: iris-source/pnpm-lock.yaml
+      - name: Install dependencies
+        working-directory: iris-source
+        run: node "$RUNNER_TEMP/iris-build-tools/scripts/ci-quiet.mjs" -- pnpm install --frozen-lockfile
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install Linux musl target and linker
+        working-directory: iris-source
+        run: node "$RUNNER_TEMP/iris-build-tools/scripts/ci-quiet.mjs" -- bash -e -c 'rustup target add x86_64-unknown-linux-musl && sudo apt-get update && sudo apt-get install -y musl-tools'
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          pattern: '*-notification-reader'
+          path: iris-source/build/native/notification-reader/incoming
+      - name: Build and inspect the platform-neutral secure core
+        working-directory: iris-source
+        env:
+          IRIS_NOTIFICATION_READER_ASSET_DIRS_JSON: >-
+            ["build/native/notification-reader/incoming/linux-x64-notification-reader","build/native/notification-reader/incoming/windows-x64-notification-reader","build/native/notification-reader/incoming/macos-notification-reader","build/native/notification-reader/incoming/linux-arm64-notification-reader"]
+        run: |
+          script_path="$RUNNER_TEMP/iris-ci-payload.sh"
+          cat > "$script_path" <<'SCRIPT'
+          set -euo pipefail
+          release_key="$(node scripts/generate-release-key.mjs)"
+          release_id="$(node -e 'process.stdout.write(require("node:crypto").randomBytes(32).toString("base64url"))')"
+          IRIS_RELEASE_KEY="$release_key" IRIS_RELEASE_ID="$release_id" pnpm run build:release
+          IRIS_RELEASE_KEY="$release_key" IRIS_RELEASE_ID="$release_id" node --test test/contract/registry/notification-assets.contract.test.cjs
+          SCRIPT
+          node "$RUNNER_TEMP/iris-build-tools/scripts/ci-quiet.mjs" -- bash "$script_path"
+
+  performance-reference:
+    needs: resolve
+    if: needs.resolve.outputs.native_only != 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: ${{ github.sha }}
+          path: .ci-tools
+          persist-credentials: false
+      - run: mv .ci-tools "$RUNNER_TEMP/iris-build-tools"
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          repository: lsy-404/IRIS
+          ref: ${{ needs.resolve.outputs.source_sha }}
+          path: iris-source
+          ssh-key: ${{ secrets.IRIS_BUILD_DEPLOY_KEY }}
+          persist-credentials: false
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.34.6
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: iris-source/pnpm-lock.yaml
+      - name: Install dependencies
+        working-directory: iris-source
+        run: node "$RUNNER_TEMP/iris-build-tools/scripts/ci-quiet.mjs" -- pnpm install --frozen-lockfile
+      - name: Measure performance
+        working-directory: iris-source
+        run: node "$RUNNER_TEMP/iris-build-tools/scripts/ci-quiet.mjs" -- pnpm run test:performance --rounds=3
