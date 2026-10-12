@@ -588,9 +588,12 @@ jobs:
           package-manager-cache: false
       - name: Setup Rust
         if: runner.os != 'macOS'
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.target }}
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+      - name: Install Linux Rust target
+        if: runner.os == 'Linux'
+        run: rustup target add '${{ matrix.target }}' --toolchain stable
       - name: Install static Linux C linker
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y musl-tools
