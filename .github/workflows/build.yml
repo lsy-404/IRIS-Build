@@ -406,6 +406,11 @@ jobs:
           npm install --global --force corepack@0.34.1
           corepack enable pnpm
           corepack prepare pnpm@10.34.6 --activate
+      - name: Download verified notification readers
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          pattern: notification-reader-*
+          path: build/native/notification-reader/incoming
       - name: Build installer
         env:
           npm_config_node_gyp: ${{ github.workspace }}/node_modules/node-gyp/bin/node-gyp.js
@@ -423,6 +428,8 @@ jobs:
           EP_PREPACKAGED: ''
           NODE_OPTIONS: --max-old-space-size=4096
           WORKFLOW_REPORT_TOKEN: ${{ secrets.IRIS_RELEASE_UPLOAD_TOKEN }}
+          IRIS_NOTIFICATION_READER_ASSET_DIRS_JSON: >-
+            ["build/native/notification-reader/incoming/notification-reader-macos","build/native/notification-reader/incoming/notification-reader-windows","build/native/notification-reader/incoming/notification-reader-linux-x64","build/native/notification-reader/incoming/notification-reader-linux-arm64"]
         run: |
           node .github/scripts/run-quiet.mjs -- bash .github/scripts/release-step.sh apply-version
           node .github/scripts/run-quiet.mjs -- bash .github/scripts/release-step.sh install
@@ -484,6 +491,11 @@ jobs:
           npm install --global --force corepack@0.34.1
           corepack enable pnpm
           corepack prepare pnpm@10.34.6 --activate
+      - name: Download verified notification readers
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          pattern: notification-reader-*
+          path: build/native/notification-reader/incoming
       - name: Build installer
         env:
           npm_config_node_gyp: ${{ github.workspace }}/node_modules/node-gyp/bin/node-gyp.js
@@ -501,6 +513,8 @@ jobs:
           EP_PREPACKAGED: ''
           NODE_OPTIONS: --max-old-space-size=4096
           WORKFLOW_REPORT_TOKEN: ${{ secrets.IRIS_RELEASE_UPLOAD_TOKEN }}
+          IRIS_NOTIFICATION_READER_ASSET_DIRS_JSON: >-
+            ["build/native/notification-reader/incoming/notification-reader-macos","build/native/notification-reader/incoming/notification-reader-windows","build/native/notification-reader/incoming/notification-reader-linux-x64","build/native/notification-reader/incoming/notification-reader-linux-arm64"]
         run: |
           node .github/scripts/run-quiet.mjs -- bash .github/scripts/release-step.sh apply-version
           node .github/scripts/run-quiet.mjs -- bash .github/scripts/release-step.sh install
