@@ -406,9 +406,8 @@ jobs:
           set -euo pipefail
           export IRIS_RELEASE_KEY="$(node scripts/generate-release-key.mjs)"
           export IRIS_RELEASE_ID="$(node -e 'process.stdout.write(require("node:crypto").randomBytes(32).toString("base64url"))')"
-          quiet="$RUNNER_TEMP/iris-build-tools/scripts/ci-quiet.mjs"
-          node "$quiet" -- pnpm run build:release
-          node "$quiet" -- node --test test/contract/registry/notification-assets.contract.test.cjs
+          pnpm run build:release
+          node --test test/contract/registry/notification-assets.contract.test.cjs
           SCRIPT
           node "$RUNNER_TEMP/iris-build-tools/scripts/ci-quiet.mjs" -- bash "$script_path"
 
