@@ -243,7 +243,7 @@ jobs:
 
   shell-check:
     timeout-minutes: 30
-    needs: release-gate
+    needs: [release-gate, notification-readers]
     permissions:
       actions: read
       contents: read
@@ -332,6 +332,11 @@ jobs:
           WORKFLOW_REPORT_TOKEN: ${{ secrets.IRIS_RELEASE_UPLOAD_TOKEN }}
         run: |
           node .github/scripts/run-quiet.mjs -- bash .github/scripts/release-step.sh generate-key
+      - name: Download verified notification readers
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          pattern: notification-reader-*
+          path: build/native/notification-reader/incoming
       - name: Decrypt and pack core payload
         env:
           IRIS_RELEASE_KEY_TRANSFER_KEY: ${{ secrets.IRIS_RELEASE_KEY_TRANSFER_KEY }}
@@ -341,6 +346,8 @@ jobs:
           IRIS_CORE_VERSION: ${{ steps.prepare.outputs.core_version }}
           IRIS_INTERNAL_VERSION: ${{ steps.prepare.outputs.internal_version }}
           WORKFLOW_REPORT_TOKEN: ${{ secrets.IRIS_RELEASE_UPLOAD_TOKEN }}
+          IRIS_NOTIFICATION_READER_ASSET_DIRS_JSON: >-
+            ["build/native/notification-reader/incoming/notification-reader-macos","build/native/notification-reader/incoming/notification-reader-windows","build/native/notification-reader/incoming/notification-reader-linux-x64","build/native/notification-reader/incoming/notification-reader-linux-arm64"]
           NODE_OPTIONS: --max-old-space-size=4096
           IRIS_BUILD_CHANNEL: release
         run: |
@@ -560,7 +567,7 @@ jobs:
 
   notification-readers:
     needs: release-gate
-    if: (github.event_name == 'repository_dispatch' && github.event.action == 'iris-build' && github.event.client_payload.build_kind == 'core') || (github.event_name == 'workflow_dispatch' && inputs.kind == 'core')
+    if: (github.event_name == 'repository_dispatch' && github.event.action == 'iris-build' && (github.event.client_payload.build_kind == 'core' || github.event.client_payload.build_kind == 'shell')) || (github.event_name == 'workflow_dispatch' && (inputs.kind == 'core' || inputs.kind == 'shell'))
     env:
       WORKFLOW_REPORT_TOKEN: ${{ secrets.IRIS_RELEASE_UPLOAD_TOKEN }}
     strategy:
