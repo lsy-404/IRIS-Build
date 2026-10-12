@@ -109,14 +109,13 @@ jobs:
           path: iris-source
           ssh-key: ${{ secrets.IRIS_BUILD_DEPLOY_KEY }}
           persist-credentials: false
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 10.34.6
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
         with:
           node-version: 24
-          cache: pnpm
-          cache-dependency-path: iris-source/pnpm-lock.yaml
+          package-manager-cache: false
+      - name: Prepare pnpm
+        working-directory: iris-source
+        run: node "$RUNNER_TEMP/iris-build-tools/scripts/ci-quiet.mjs" -- bash -e -c 'npm install --global --force corepack@0.34.1 && corepack enable pnpm && corepack prepare pnpm@10.34.6 --activate'
       - name: Install dependencies
         working-directory: iris-source
         run: node "$RUNNER_TEMP/iris-build-tools/scripts/ci-quiet.mjs" -- pnpm install --frozen-lockfile
@@ -168,14 +167,14 @@ jobs:
           path: iris-source
           ssh-key: ${{ secrets.IRIS_BUILD_DEPLOY_KEY }}
           persist-credentials: false
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 10.34.6
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
         with:
           node-version: 24
-          cache: pnpm
-          cache-dependency-path: iris-source/pnpm-lock.yaml
+          package-manager-cache: false
+      - name: Prepare pnpm
+        working-directory: iris-source
+        run: node "$env:RUNNER_TEMP/iris-build-tools/scripts/ci-quiet.mjs" -- pwsh -NoProfile -Command 'npm install --global --force corepack@0.34.1; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; corepack enable pnpm; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; corepack prepare pnpm@10.34.6 --activate; exit $LASTEXITCODE'
+        shell: pwsh
       - name: Install dependencies
         working-directory: iris-source
         run: node "$env:RUNNER_TEMP/iris-build-tools/scripts/ci-quiet.mjs" -- pwsh -NoProfile -Command 'pnpm install --frozen-lockfile; exit $LASTEXITCODE'
@@ -278,14 +277,13 @@ jobs:
           path: iris-source
           ssh-key: ${{ secrets.IRIS_BUILD_DEPLOY_KEY }}
           persist-credentials: false
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 10.34.6
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
         with:
           node-version: 24
-          cache: pnpm
-          cache-dependency-path: iris-source/pnpm-lock.yaml
+          package-manager-cache: false
+      - name: Prepare pnpm
+        working-directory: iris-source
+        run: node "$RUNNER_TEMP/iris-build-tools/scripts/ci-quiet.mjs" -- bash -e -c 'npm install --global --force corepack@0.34.1 && corepack enable pnpm && corepack prepare pnpm@10.34.6 --activate'
       - name: Install dependencies
         working-directory: iris-source
         run: node "$RUNNER_TEMP/iris-build-tools/scripts/ci-quiet.mjs" -- pnpm install --frozen-lockfile
@@ -318,14 +316,13 @@ jobs:
           path: iris-source
           ssh-key: ${{ secrets.IRIS_BUILD_DEPLOY_KEY }}
           persist-credentials: false
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 10.34.6
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
         with:
           node-version: 24
-          cache: pnpm
-          cache-dependency-path: iris-source/pnpm-lock.yaml
+          package-manager-cache: false
+      - name: Prepare pnpm
+        working-directory: iris-source
+        run: node "$RUNNER_TEMP/iris-build-tools/scripts/ci-quiet.mjs" -- bash -e -c 'npm install --global --force corepack@0.34.1 && corepack enable pnpm && corepack prepare pnpm@10.34.6 --activate'
       - name: Install dependencies
         working-directory: iris-source
         run: node "$RUNNER_TEMP/iris-build-tools/scripts/ci-quiet.mjs" -- pnpm install --frozen-lockfile
@@ -361,14 +358,13 @@ jobs:
           path: iris-source
           ssh-key: ${{ secrets.IRIS_BUILD_DEPLOY_KEY }}
           persist-credentials: false
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 10.34.6
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
         with:
           node-version: 24
-          cache: pnpm
-          cache-dependency-path: iris-source/pnpm-lock.yaml
+          package-manager-cache: false
+      - name: Prepare pnpm
+        working-directory: iris-source
+        run: node "$RUNNER_TEMP/iris-build-tools/scripts/ci-quiet.mjs" -- bash -e -c 'npm install --global --force corepack@0.34.1 && corepack enable pnpm && corepack prepare pnpm@10.34.6 --activate'
       - name: Install dependencies
         working-directory: iris-source
         run: node "$RUNNER_TEMP/iris-build-tools/scripts/ci-quiet.mjs" -- pnpm install --frozen-lockfile
@@ -415,14 +411,13 @@ jobs:
           path: iris-source
           ssh-key: ${{ secrets.IRIS_BUILD_DEPLOY_KEY }}
           persist-credentials: false
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 10.34.6
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
         with:
           node-version: 24
-          cache: pnpm
-          cache-dependency-path: iris-source/pnpm-lock.yaml
+          package-manager-cache: false
+      - name: Prepare pnpm
+        working-directory: iris-source
+        run: node "$RUNNER_TEMP/iris-build-tools/scripts/ci-quiet.mjs" -- bash -e -c 'npm install --global --force corepack@0.34.1 && corepack enable pnpm && corepack prepare pnpm@10.34.6 --activate'
       - name: Install dependencies
         working-directory: iris-source
         run: node "$RUNNER_TEMP/iris-build-tools/scripts/ci-quiet.mjs" -- pnpm install --frozen-lockfile
