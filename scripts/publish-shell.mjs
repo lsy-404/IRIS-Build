@@ -97,7 +97,7 @@ async function githubRequest({ fetchImpl, sleep }, token, method, route, { allow
   }
 }
 
-// Gate: wait until no earlier shell release is still waiting to be published.
+// Prevent newer builds from overtaking an unpublished shell release.
 
 async function pendingBuildRun(deps, token, repo, currentRunId) {
   const listing = await githubRequest(deps, token, 'GET', `/repos/${repo}/actions/artifacts?name=${CONTEXT_ARTIFACT}&per_page=100`);
@@ -110,41 +110,42 @@ async function pendingBuildRun(deps, token, repo, currentRunId) {
   return null;
 }
 
-export async function gate({ env = process.env, fetchImpl = fetch, sleep = defaultSleep, now = Date.now, summary } = {}) {
+export async function gate({ env = process.env, fetchImpl = fetch, sleep = defaultSleep, summary } = {}) {
   const token = requireToken(env);
   const repo = requireRepository(env);
   const runId = requireRunId(env.GITHUB_RUN_ID);
-  const timeoutMs = Number(env.INPUT_GATE_TIMEOUT_SECONDS ?? 14400) * 1000;
-  const intervalMs = Number(env.INPUT_GATE_INTERVAL_SECONDS ?? 60) * 1000;
-  if (!(timeoutMs >= 0) || !(intervalMs > 0)) throw new PublishError('INVALID_GATE_SETTINGS');
   const write = summary ?? (async (text) => { if (env.GITHUB_STEP_SUMMARY) await appendFile(env.GITHUB_STEP_SUMMARY, text); });
-  const deadline = now() + timeoutMs;
-  for (;;) {
-    const blocking = await pendingBuildRun({ fetchImpl, sleep }, token, repo, runId);
-    if (blocking === null) return;
-    if (now() >= deadline) {
-      await write(`## Shell publish pending\n\nBuild run ${blocking} has signed shell installers that are not published yet. Publish or discard that release, then build again.\n`);
-      throw new PublishError('SHELL_PUBLISH_PENDING');
-    }
-    await sleep(intervalMs);
-  }
+  const blocking = await pendingBuildRun({ fetchImpl, sleep }, token, repo, runId);
+  if (blocking === null) return;
+  await write(`## Shell publish pending\n\nBuild run ${blocking} has shell installers awaiting publication. Run the shell publisher for that build, then build again.\n`);
+  throw new PublishError('SHELL_PUBLISH_PENDING');
 }
 
 // Resolve: decide whether a finished build run carries a shell release.
 
-export async function resolve({ env = process.env, fetchImpl = fetch, sleep = defaultSleep } = {}) {
+export async function resolve({ env = process.env, fetchImpl = fetch, sleep = defaultSleep, now = Date.now } = {}) {
   const deps = { fetchImpl, sleep };
   const token = requireToken(env);
   const repo = requireRepository(env);
   const buildRunId = requireRunId(env.INPUT_BUILD_RUN_ID);
   const repository = await githubRequest(deps, token, 'GET', `/repos/${repo}`);
-  const run = await githubRequest(deps, token, 'GET', `/repos/${repo}/actions/runs/${buildRunId}`);
-  if (String(run?.id) !== buildRunId
-    || String(run.path ?? '').split('@')[0] !== BUILD_WORKFLOW
-    || String(run.repository?.id) !== String(env.GITHUB_REPOSITORY_ID ?? '')
-    || run.run_attempt !== 1 || run.status !== 'completed' || run.conclusion !== 'success'
-    || typeof repository?.default_branch !== 'string' || run.head_branch !== repository.default_branch
-    || !['repository_dispatch', 'workflow_dispatch'].includes(run.event)) throw new PublishError('BUILD_RUN_NOT_ALLOWED');
+  const deadline = now() + 120_000;
+  for (;;) {
+    const run = await githubRequest(deps, token, 'GET', `/repos/${repo}/actions/runs/${buildRunId}`);
+    if (String(run?.id) !== buildRunId
+      || String(run.path ?? '').split('@')[0] !== BUILD_WORKFLOW
+      || String(run.repository?.id) !== String(env.GITHUB_REPOSITORY_ID ?? '')
+      || run.run_attempt !== 1
+      || typeof repository?.default_branch !== 'string' || run.head_branch !== repository.default_branch
+      || !['repository_dispatch', 'workflow_dispatch'].includes(run.event)) throw new PublishError('BUILD_RUN_NOT_ALLOWED');
+    if (run.status === 'completed') {
+      if (run.conclusion !== 'success') throw new PublishError('BUILD_RUN_NOT_ALLOWED');
+      break;
+    }
+    if (run.status !== 'in_progress') throw new PublishError('BUILD_RUN_NOT_ALLOWED');
+    if (now() >= deadline) throw new PublishError('BUILD_RUN_PENDING');
+    await sleep(Math.min(2000, deadline - now()));
+  }
   const listing = await githubRequest(deps, token, 'GET', `/repos/${repo}/actions/runs/${buildRunId}/artifacts?name=${CONTEXT_ARTIFACT}&per_page=100`);
   const artifacts = listing?.artifacts;
   if (!Array.isArray(artifacts)) throw new PublishError('CONTEXT_INVALID');
@@ -238,31 +239,15 @@ function interpretStatus(body, arch) {
   return { digest: output.archive_digest, size: output.archive_size };
 }
 
-export async function awaitSigning({ env = process.env, fetchImpl = fetch, sleep = defaultSleep, now = Date.now, log = (line) => process.stdout.write(`${line}\n`) } = {}) {
+export async function checkSigning({ env = process.env, fetchImpl = fetch, sleep = defaultSleep, log = (line) => process.stdout.write(`${line}\n`) } = {}) {
   const inputs = signingInputs(env);
-  const timeoutMs = Number(env.INPUT_TIMEOUT_SECONDS ?? 10800) * 1000;
-  if (!(timeoutMs > 0)) throw new PublishError('INVALID_INPUT');
-  const deadline = now() + timeoutMs;
-  const done = new Set();
-  const lastState = new Map();
-  for (;;) {
-    let wait = 30;
-    for (const arch of ARCHES.filter((name) => !done.has(name))) {
-      let body;
-      try { body = await signingStatus({ fetchImpl }, inputs, arch); }
-      catch (error) {
-        if (error.transient) continue;
-        throw error;
-      }
-      if (interpretStatus(body, arch)) { done.add(arch); }
-      const state = SAFE_CODE.test(body.state ?? '') ? body.state : 'unknown';
-      if (lastState.get(arch) !== state) { lastState.set(arch, state); log(`${arch}: ${state}`); }
-      if (Number.isFinite(body.retry_after_seconds)) wait = body.retry_after_seconds;
-    }
-    if (done.size === ARCHES.length) return;
-    if (now() >= deadline) throw new PublishError('SIGNING_TIMEOUT');
-    await sleep(Math.min(300, Math.max(15, wait)) * 1000);
+  let ready = true;
+  for (const arch of ARCHES) {
+    const body = await retryStatus({ fetchImpl, sleep }, inputs, arch);
+    if (!interpretStatus(body, arch)) ready = false;
+    log(`${arch}: ${SAFE_CODE.test(body.state ?? '') ? body.state : 'unknown'}`);
   }
+  return ready;
 }
 
 // Fetch: download, check and stage the signed disk images.
@@ -621,14 +606,14 @@ export async function main(args = process.argv.slice(2), deps = {}) {
   const stderr = deps.stderr ?? process.stderr;
   try {
     const [command, flag] = args;
-    if (!['gate', 'resolve', 'context', 'await', 'fetch', 'assemble', 'preflight', 'cleanup-artifacts'].includes(command)
+    if (!['gate', 'resolve', 'context', 'check', 'fetch', 'assemble', 'preflight', 'cleanup-artifacts'].includes(command)
       || args.length > 2 || (flag !== undefined && !(command === 'context' && flag === '--public'))) throw new PublishError('INVALID_COMMAND');
     const injected = { env, fetchImpl: deps.fetchImpl, sleep: deps.sleep, now: deps.now, exec: deps.exec, log: deps.log };
     const defined = Object.fromEntries(Object.entries(injected).filter(([, value]) => value !== undefined));
     if (command === 'gate') await gate(defined);
     else if (command === 'resolve') await writeOutputs(env, { shell: (await resolve(defined)).shell });
     else if (command === 'context') await writeOutputs(env, contextOutputs(await readContext({ env }), { pub: flag === '--public', sealKey: env.IRIS_CONTEXT_SEAL_KEY }));
-    else if (command === 'await') await awaitSigning(defined);
+    else if (command === 'check') await writeOutputs(env, { ready: await checkSigning(defined) });
     else if (command === 'fetch') await writeOutputs(env, { dir: await fetchSigned(defined) });
     else if (command === 'assemble') await assemble({ env });
     else if (command === 'preflight') await writeOutputs(env, { already: (await preflight(defined)).already });

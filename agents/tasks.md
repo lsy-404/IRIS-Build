@@ -12,3 +12,5 @@
 | 009 | [CI] macOS签名发布 | shell 发布的 macOS DMG 先经签名中心签名并公证，再发布全部平台资产 | 发布不得再带 ad-hoc 签名的 macOS 安装包 | 🔄 进行中 |
 
 | 010 | [Feature] 通知原生资产交接 | 同次 core 构建生成五个平台读取器并交接完整资产 | 正式 core 需要完整 native 资产，复用现有 source SSH 与同仓库 artifacts 权限 | ✅ 已完成（main ba036e1 已推送；实际平台构建由后续既有 core 构建验收） |
+
+| 011 | [BugFix] actions-reliability | 修复 shell 发布交接及无效轮询，处理陈旧运行 | 用户要求处理全仓库 Actions 异常 | 🔄 进行中 |

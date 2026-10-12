@@ -7,7 +7,7 @@ import path from 'node:path';
 import test from 'node:test';
 import { buildContext } from '../scripts/submit-macos.mjs';
 import {
-  assemble, awaitSigning, cleanupArtifacts, fetchSigned, gate, latestMacYml, main, preflight, readContext, resolve, validateVerification, verifyMacos,
+  assemble, checkSigning, cleanupArtifacts, fetchSigned, gate, latestMacYml, main, preflight, readContext, resolve, validateVerification, verifyMacos,
 } from '../scripts/publish-shell.mjs';
 
 const SHA = 'a5237f77558b8e32886ba4ea0cca90c8c416520c';
@@ -43,7 +43,10 @@ function githubFake({ artifacts, runs = {}, repo = { default_branch: 'main' }, r
     if (pathname === '/repos/o/r/actions/artifacts') return json(200, { artifacts: typeof artifacts === 'function' ? artifacts() : artifacts });
     if (pathname === '/repos/o/r') return json(200, repo);
     const runMatch = pathname.match(/^\/repos\/o\/r\/actions\/runs\/(\d+)$/);
-    if (runMatch) return runs[runMatch[1]] ? json(200, runs[runMatch[1]]) : new Response(null, { status: 404 });
+    if (runMatch) {
+      const run = typeof runs[runMatch[1]] === 'function' ? runs[runMatch[1]]() : runs[runMatch[1]];
+      return run ? json(200, run) : new Response(null, { status: 404 });
+    }
     const listMatch = pathname.match(/^\/repos\/o\/r\/actions\/runs\/(\d+)\/artifacts$/);
     if (listMatch) {
       const all = runArtifacts[listMatch[1]] ?? [];
@@ -55,17 +58,16 @@ function githubFake({ artifacts, runs = {}, repo = { default_branch: 'main' }, r
   return { fetchImpl, calls, deletes };
 }
 
-const gateEnv = { GITHUB_TOKEN: 't', GITHUB_REPOSITORY: 'o/r', GITHUB_RUN_ID: '500', INPUT_GATE_TIMEOUT_SECONDS: '600', INPUT_GATE_INTERVAL_SECONDS: '60' };
+const gateEnv = { GITHUB_TOKEN: 't', GITHUB_REPOSITORY: 'o/r', GITHUB_RUN_ID: '500' };
 const contextArtifact = (runId, extra = {}) => ({ id: runId * 10, name: 'shell-release-context', expired: false, workflow_run: { id: runId }, ...extra });
 const buildRun = (extra = {}) => ({ id: 400, path: '.github/workflows/build.yml', conclusion: 'success', ...extra });
 
-test('gate waits on a successful build run with an unpublished context, then times out', async () => {
+test('gate rejects an unpublished release without occupying a runner to wait', async () => {
   const { state, now, sleep } = clock();
   const github = githubFake({ artifacts: [contextArtifact(400)], runs: { 400: buildRun() } });
   const summaries = [];
   await assert.rejects(gate({ env: gateEnv, fetchImpl: github.fetchImpl, now, sleep, summary: async (text) => summaries.push(text) }), { code: 'SHELL_PUBLISH_PENDING' });
-  assert.equal(state.sleeps.length, 10);
-  assert.ok(state.sleeps.every((ms) => ms === 60_000));
+  assert.equal(state.sleeps.length, 0);
   assert.match(summaries.join(''), /400/);
 });
 
@@ -86,12 +88,11 @@ test('gate passes when nothing is pending', async () => {
   }
 });
 
-test('gate recognises the workflow path with a ref suffix and passes once the artifact disappears', async () => {
+test('gate recognises a pending release when the workflow path has a ref suffix', async () => {
   const { state, now, sleep } = clock();
-  let listings = 0;
-  const github = githubFake({ artifacts: () => (listings++ < 2 ? [contextArtifact(400)] : []), runs: { 400: buildRun({ path: '.github/workflows/build.yml@refs/heads/main' }) } });
-  await gate({ env: gateEnv, fetchImpl: github.fetchImpl, now, sleep, summary: async () => {} });
-  assert.equal(state.sleeps.length, 2);
+  const github = githubFake({ artifacts: [contextArtifact(400)], runs: { 400: buildRun({ path: '.github/workflows/build.yml@refs/heads/main' }) } });
+  await assert.rejects(gate({ env: gateEnv, fetchImpl: github.fetchImpl, now, sleep, summary: async () => {} }), { code: 'SHELL_PUBLISH_PENDING' });
+  assert.equal(state.sleeps.length, 0);
 });
 
 // resolve
@@ -108,13 +109,39 @@ test('resolve accepts a clean build run and reports whether it holds a shell rel
 
 test('resolve rejects each run field that deviates', async () => {
   const mutations = {
-    path: { path: '.github/workflows/publish-shell.yml' }, repository: { repository: { id: 5 } }, attempt: { run_attempt: 2 }, status: { status: 'in_progress' },
+    path: { path: '.github/workflows/publish-shell.yml' }, repository: { repository: { id: 5 } }, attempt: { run_attempt: 2 }, status: { status: 'queued' },
     conclusion: { conclusion: 'failure' }, branch: { head_branch: 'feature' }, event: { event: 'push' }, id: { id: 901 },
   };
   for (const [label, mutation] of Object.entries(mutations)) {
     const github = githubFake({ runs: { 900: goodRun(mutation) }, runArtifacts: { 900: [contextArtifact(900)] } });
     await assert.rejects(resolve({ env: resolveEnv, fetchImpl: github.fetchImpl, sleep: async () => {} }), { code: 'BUILD_RUN_NOT_ALLOWED' }, label);
   }
+});
+
+test('resolve waits for the handoff build to complete before reading release artifacts', async () => {
+  const { state, now, sleep } = clock();
+  const github = githubFake({
+    runs: { 900: () => goodRun(state.sleeps.length === 0 ? { status: 'in_progress', conclusion: null } : {}) },
+    runArtifacts: { 900: [contextArtifact(900)] },
+  });
+  assert.deepEqual(await resolve({ env: resolveEnv, fetchImpl: github.fetchImpl, now, sleep }), { shell: true });
+  assert.ok(state.sleeps.length > 0);
+  assert.ok(state.t - 1_000_000 <= 120_000);
+});
+
+test('resolve stops a handoff that cannot finish within two minutes', async () => {
+  const { state, now, sleep } = clock();
+  const github = githubFake({ runs: { 900: goodRun({ status: 'in_progress', conclusion: null }) } });
+  await assert.rejects(resolve({ env: resolveEnv, fetchImpl: github.fetchImpl, now, sleep }), { code: 'BUILD_RUN_PENDING' });
+  assert.ok(state.t - 1_000_000 <= 120_000);
+  assert.equal(github.calls.some((call) => call.includes('/900/artifacts')), false);
+});
+
+test('resolve refuses a handoff build that finishes unsuccessfully', async () => {
+  const { state, now, sleep } = clock();
+  const github = githubFake({ runs: { 900: () => goodRun(state.sleeps.length === 0 ? { status: 'in_progress', conclusion: null } : { conclusion: 'failure' }) } });
+  await assert.rejects(resolve({ env: resolveEnv, fetchImpl: github.fetchImpl, now, sleep }), { code: 'BUILD_RUN_NOT_ALLOWED' });
+  assert.equal(github.calls.some((call) => call.includes('/900/artifacts')), false);
 });
 
 test('resolve rejects two context artifacts and an expired one', async () => {
@@ -187,7 +214,6 @@ test('context cannot be read without the seal key and the file never holds the p
 const awaitEnv = () => ({
   SIGNING_API_KEY: 'key', INPUT_BUILD_RUN_ID: BUILD_RUN, INPUT_VERSION: VERSION, INPUT_SOURCE_SHA: SHA,
   INPUT_ARM64_REQUEST_ID: ID.arm64, INPUT_ARM64_INPUT_DIGEST: INPUT_DIGEST.arm64, INPUT_X64_REQUEST_ID: ID.x64, INPUT_X64_INPUT_DIGEST: INPUT_DIGEST.x64,
-  INPUT_TIMEOUT_SECONDS: '3600',
 });
 
 const statusBody = (arch, extra = {}) => ({
@@ -214,31 +240,31 @@ function centerStatus(script) {
   return { fetchImpl, calls };
 }
 
-test('await follows state sequences to success and logs only state changes', async () => {
+test('signing readiness returns pending after one inspection instead of holding a runner', async () => {
   const { state, now, sleep } = clock();
-  const lines = [];
-  const center = centerStatus({
-    arm64: [statusBody('arm64'), statusBody('arm64', { state: 'notarizing' }), SUCCEEDED('arm64')],
-    x64: [statusBody('x64', { state: 'notarizing' }), statusBody('x64', { state: 'notarizing' }), SUCCEEDED('x64')],
-  });
-  await awaitSigning({ env: awaitEnv(), fetchImpl: center.fetchImpl, sleep, now, log: (line) => lines.push(line) });
-  assert.deepEqual(lines, ['arm64: queued', 'x64: notarizing', 'arm64: notarizing', 'arm64: succeeded', 'x64: succeeded']);
-  assert.equal(state.sleeps.length, 2);
-  assert.equal(center.calls.filter((arch) => arch === 'arm64').length, 3);
+  const center = centerStatus({ arm64: [statusBody('arm64'), SUCCEEDED('arm64')], x64: [SUCCEEDED('x64')] });
+  assert.equal(await checkSigning({ env: awaitEnv(), fetchImpl: center.fetchImpl, sleep, now, log() {} }), false);
+  assert.deepEqual(center.calls, ['arm64', 'x64']);
+  assert.deepEqual(state.sleeps, []);
 });
 
-test('await maps every terminal failure to its code', async () => {
+test('signing readiness accepts only a complete signed pair', async () => {
+  const center = centerStatus({ arm64: [SUCCEEDED('arm64')], x64: [SUCCEEDED('x64')] });
+  assert.equal(await checkSigning({ env: awaitEnv(), fetchImpl: center.fetchImpl, log() {} }), true);
+});
+
+test('signing readiness maps every terminal failure to its code', async () => {
   for (const [state, code] of [['failed', 'SIGNING_FAILED'], ['cancelled', 'SIGNING_CANCELLED']]) {
     const { now, sleep } = clock();
     const center = centerStatus({ arm64: [statusBody('arm64', { state, error: 'notarization_rejected' })], x64: [statusBody('x64')] });
-    await assert.rejects(awaitSigning({ env: awaitEnv(), fetchImpl: center.fetchImpl, sleep, now, log() {} }), { code, detail: 'arm64 notarization_rejected' });
+    await assert.rejects(checkSigning({ env: awaitEnv(), fetchImpl: center.fetchImpl, sleep, now, log() {} }), { code, detail: 'arm64 notarization_rejected' });
   }
   const { now, sleep } = clock();
   const center = centerStatus({ arm64: [statusBody('arm64', { state: 'failed', error: 'Has Spaces' })], x64: [statusBody('x64')] });
-  await assert.rejects(awaitSigning({ env: awaitEnv(), fetchImpl: center.fetchImpl, sleep, now, log() {} }), { code: 'SIGNING_FAILED', detail: 'arm64' });
+  await assert.rejects(checkSigning({ env: awaitEnv(), fetchImpl: center.fetchImpl, sleep, now, log() {} }), { code: 'SIGNING_FAILED', detail: 'arm64' });
 });
 
-test('await rejects each identity field mismatch', async () => {
+test('signing readiness rejects each identity field mismatch', async () => {
   const mutations = {
     request_id: { request_id: ID.x64 }, project_id: { project_id: 'iris-shell-x64' }, platform: { platform: 'linux' }, source_run_id: { source_run_id: 901 },
     version: { version: '9.9.9' }, source_sha: { source_sha: 'f'.repeat(40) }, input_digest: { input_digest: `sha256:${'0'.repeat(64)}` },
@@ -246,45 +272,27 @@ test('await rejects each identity field mismatch', async () => {
   for (const [label, mutation] of Object.entries(mutations)) {
     const { now, sleep } = clock();
     const center = centerStatus({ arm64: [SUCCEEDED('arm64', mutation)], x64: [SUCCEEDED('x64')] });
-    await assert.rejects(awaitSigning({ env: awaitEnv(), fetchImpl: center.fetchImpl, sleep, now, log() {} }), { code: 'SIGNING_REQUEST_MISMATCH' }, label);
+    await assert.rejects(checkSigning({ env: awaitEnv(), fetchImpl: center.fetchImpl, sleep, now, log() {} }), { code: 'SIGNING_REQUEST_MISMATCH' }, label);
   }
 });
 
-test('await clamps retry_after_seconds between 15 and 300 seconds', async () => {
-  for (const [seconds, expected] of [[1, 15_000], [45, 45_000], [9999, 300_000]]) {
-    const { state, now, sleep } = clock();
-    const center = centerStatus({
-      arm64: [statusBody('arm64', { retry_after_seconds: seconds }), SUCCEEDED('arm64')],
-      x64: [statusBody('x64', { retry_after_seconds: seconds }), SUCCEEDED('x64')],
-    });
-    await awaitSigning({ env: awaitEnv(), fetchImpl: center.fetchImpl, sleep, now, log() {} });
-    assert.deepEqual(state.sleeps, [expected]);
-  }
-});
-
-test('await gives up at the deadline', async () => {
-  const { now, sleep } = clock();
-  const center = centerStatus({ arm64: [statusBody('arm64')], x64: [statusBody('x64')] });
-  await assert.rejects(awaitSigning({ env: { ...awaitEnv(), INPUT_TIMEOUT_SECONDS: '100' }, fetchImpl: center.fetchImpl, sleep, now, log() {} }), { code: 'SIGNING_TIMEOUT' });
-});
-
-test('await retries 5xx, 429, 408 and network errors but treats 401, 403 and 404 as fatal', async () => {
+test('signing readiness retries 5xx, 429, 408 and network errors but treats 401, 403 and 404 as fatal', async () => {
   const { state, now, sleep } = clock();
   const center = centerStatus({ arm64: [503, 429, 408, new TypeError('fetch failed'), SUCCEEDED('arm64')], x64: [SUCCEEDED('x64')] });
-  await awaitSigning({ env: awaitEnv(), fetchImpl: center.fetchImpl, sleep, now, log() {} });
+  await checkSigning({ env: awaitEnv(), fetchImpl: center.fetchImpl, sleep, now, log() {} });
   assert.ok(state.sleeps.length >= 4);
   for (const [status, code] of [[401, 'SIGNING_AUTH_FAILED'], [403, 'SIGNING_AUTH_FAILED'], [404, 'SIGNING_REQUEST_NOT_FOUND']]) {
     const fatal = clock();
     const failing = centerStatus({ arm64: [status], x64: [statusBody('x64')] });
-    await assert.rejects(awaitSigning({ env: awaitEnv(), fetchImpl: failing.fetchImpl, sleep: fatal.sleep, now: fatal.now, log() {} }), { code });
+    await assert.rejects(checkSigning({ env: awaitEnv(), fetchImpl: failing.fetchImpl, sleep: fatal.sleep, now: fatal.now, log() {} }), { code });
     assert.equal(failing.calls.length, 1);
   }
 });
 
-test('await requires the output summary on success', async () => {
+test('signing readiness requires the output summary on success', async () => {
   const { now, sleep } = clock();
   const center = centerStatus({ arm64: [statusBody('arm64', { state: 'succeeded' })], x64: [SUCCEEDED('x64')] });
-  await assert.rejects(awaitSigning({ env: awaitEnv(), fetchImpl: center.fetchImpl, sleep, now, log() {} }), { code: 'SIGNING_OUTPUT_INVALID' });
+  await assert.rejects(checkSigning({ env: awaitEnv(), fetchImpl: center.fetchImpl, sleep, now, log() {} }), { code: 'SIGNING_OUTPUT_INVALID' });
 });
 
 // mac checks
