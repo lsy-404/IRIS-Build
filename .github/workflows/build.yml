@@ -39,6 +39,7 @@ defaults:
 
 jobs:
   core:
+    needs: [notification-readers]
     permissions:
       actions: read
       contents: write
@@ -168,6 +169,12 @@ jobs:
         env:
           WORKFLOW_REPORT_TOKEN: ${{ secrets.IRIS_RELEASE_UPLOAD_TOKEN }}
         run: node .github/scripts/run-quiet.mjs -- bash .github/scripts/release-step.sh generate-core-key
+      - name: Download verified notification readers
+        if: steps.gate.outputs.shell_build != 'true'
+        uses: actions/download-artifact@v4
+        with:
+          pattern: notification-reader-*
+          path: build/native/notification-reader/incoming
       - name: Pack core payload
         if: steps.gate.outputs.shell_build != 'true'
         env:
@@ -178,6 +185,8 @@ jobs:
           WORKFLOW_REPORT_TOKEN: ${{ secrets.IRIS_RELEASE_UPLOAD_TOKEN }}
           IRIS_BUILD_CHANNEL: release
           NODE_OPTIONS: --max-old-space-size=4096
+          IRIS_NOTIFICATION_READER_ASSET_DIRS_JSON: >-
+            ["build/native/notification-reader/incoming/notification-reader-macos","build/native/notification-reader/incoming/notification-reader-windows","build/native/notification-reader/incoming/notification-reader-linux-x64","build/native/notification-reader/incoming/notification-reader-linux-arm64"]
         run: node .github/scripts/run-quiet.mjs -- bash .github/scripts/release-step.sh pack-payload
       - name: Publish core payload
         if: steps.gate.outputs.shell_build != 'true'
@@ -536,3 +545,65 @@ jobs:
       - name: Wipe build workspace
         if: always()
         run: rm -rf "$RUNNER_TEMP/iris-release-key" "$RUNNER_TEMP/iris-release-envelope" "$RUNNER_TEMP/shell-release-context" iris-source build release
+
+  notification-readers:
+    if: (github.event_name == 'repository_dispatch' && github.event.action == 'iris-build' && github.event.client_payload.build_kind == 'core') || (github.event_name == 'workflow_dispatch' && inputs.kind == 'core')
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos
+            runner: macos-14
+            target: ''
+          - platform: windows
+            runner: windows-latest
+            target: ''
+          - platform: linux-x64
+            runner: ubuntu-24.04
+            target: x86_64-unknown-linux-musl
+          - platform: linux-arm64
+            runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: iris-source
+    steps:
+      - name: Validate source commit
+        working-directory: .
+        run: '[[ "$SOURCE_SHA" =~ ^[0-9a-fA-F]{40}$ ]] || { echo "source_sha must be a 40-character commit SHA" >&2; exit 1; }'
+      - name: Checkout exact private source
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          repository: lsy-404/IRIS
+          ref: ${{ env.SOURCE_SHA }}
+          path: iris-source
+          ssh-key: ${{ secrets.IRIS_BUILD_DEPLOY_KEY }}
+          persist-credentials: false
+      - name: Setup Node.js
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - name: Setup Rust
+        if: runner.os != 'macOS'
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - name: Install static Linux C linker
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+      - name: Verify the native protocol
+        if: runner.os != 'macOS'
+        run: cargo test --locked --manifest-path native/notification-reader/Cargo.toml
+      - name: Build notification readers
+        run: node scripts/native-notification-reader.mjs build
+      - name: Verify source digest
+        run: node scripts/native-notification-reader.mjs digest
+      - uses: actions/upload-artifact@v4
+        with:
+          name: notification-reader-${{ matrix.platform }}
+          path: iris-source/build/native/notification-reader
+          include-hidden-files: true
+          retention-days: 1
