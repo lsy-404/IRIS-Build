@@ -7,7 +7,20 @@ import { join } from 'node:path';
 import { spawn } from 'node:child_process';
 
 const command = process.argv.slice(2);
-const REPORT_LIMIT = 16_000;
+const REPORT_LIMIT = 12_000;
+
+function redact(output) {
+  let summary = output;
+  const secrets = Object.entries(process.env)
+    .filter(([name, value]) => value && value.length >= 4 && /(?:token|secret|password|key|pat|envelope|release_id|build_id|internal_version|sha|ref)/i.test(name))
+    .map(([, value]) => value)
+    .sort((left, right) => right.length - left.length);
+  for (const value of secrets) summary = summary.split(value).join('[REDACTED]');
+  return summary
+    .replace(/(?:authorization:\s*(?:basic|bearer)\s+|(?:ghp_|github_pat_)[A-Za-z0-9_]+)[^\s'"`]+/gi, '[REDACTED]')
+    .replace(/\b(?:run|release|build)[ _-]?id\s*[:=]\s*[^\s,]+/gi, '[REDACTED]')
+    .replace(/\b(?:commit|sha|ref)\s*[:=]\s*[^\s,]+/gi, '[REDACTED]');
+}
 
 async function reportFailure(logPath, status) {
   const endpoint = process.env.WORKFLOW_REPORT_API;
@@ -17,11 +30,11 @@ async function reportFailure(logPath, status) {
 
   try {
     const raw = await readFile(logPath, 'utf8');
-    const summary = `CI command failed with exit code ${status}.\n${raw.slice(-REPORT_LIMIT)}`;
+    const summary = `CI command failed with exit code ${status}.\n${redact(raw).slice(-REPORT_LIMIT)}`;
     await fetch(endpoint, {
       method: 'POST',
       headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ run_id: runId, summary }),
+      body: JSON.stringify({ run_id: runId, status: 'failed', exit_code: status, summary }),
       signal: AbortSignal.timeout(10_000),
     });
   } catch {

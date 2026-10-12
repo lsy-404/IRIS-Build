@@ -45,10 +45,11 @@ test('failed output and workflow commands go only to the private report', async 
 
   const address = server.address();
   const result = await runQuiet(
-    "console.log('private stdout'); console.error('::error::private stderr'); process.exit(17)",
+    "console.log(process.env.WORKFLOW_REPORT_TOKEN); console.log(process.env.SOME_API_KEY); console.error('::error::private stderr'); process.exit(17)",
     {
       WORKFLOW_REPORT_API: `http://127.0.0.1:${address.port}/report`,
       WORKFLOW_REPORT_TOKEN: 'private-token',
+      SOME_API_KEY: 'secret-value',
       GITHUB_RUN_ID: '12345',
     },
   );
@@ -58,7 +59,10 @@ test('failed output and workflow commands go only to the private report', async 
   assert.equal(result.stderr, '');
   assert.equal(report.authorization, 'Bearer private-token');
   assert.equal(report.body.run_id, '12345');
-  assert.match(report.body.summary, /private stdout/);
+  assert.equal(report.body.status, 'failed');
+  assert.equal(report.body.exit_code, 17);
+  assert.match(report.body.summary, /\[REDACTED\]/);
   assert.match(report.body.summary, /::error::private stderr/);
-  assert.doesNotMatch(result.stdout + result.stderr, /private stdout|private stderr|::/);
+  assert.doesNotMatch(report.body.summary, /private-token|secret-value/);
+  assert.doesNotMatch(result.stdout + result.stderr, /private-token|secret-value|private stderr|::/);
 });

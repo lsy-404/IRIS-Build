@@ -19,6 +19,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: iris-ci-${{ inputs.nativeOnly == true && 'native' || 'full' }}
+  cancel-in-progress: true
+
 env:
   WORKFLOW_REPORT_API: https://iris.voidcarve.com/api/v1/internal/workflow-reports
   WORKFLOW_REPORT_TOKEN: ${{ secrets.IRIS_RELEASE_UPLOAD_TOKEN }}
@@ -116,10 +120,9 @@ jobs:
       - name: Install dependencies
         working-directory: iris-source
         run: node "$RUNNER_TEMP/iris-build-tools/scripts/ci-quiet.mjs" -- pnpm install --frozen-lockfile
-      - uses: dtolnay/rust-toolchain@stable
-      - name: Install Linux musl target and linker
+      - name: Install Rust stable and Linux musl target
         working-directory: iris-source
-        run: node "$RUNNER_TEMP/iris-build-tools/scripts/ci-quiet.mjs" -- bash -e -c 'rustup target add x86_64-unknown-linux-musl && sudo apt-get update && sudo apt-get install -y musl-tools'
+        run: node "$RUNNER_TEMP/iris-build-tools/scripts/ci-quiet.mjs" -- bash -e -c 'rustup toolchain install stable --profile minimal && rustup default stable && rustup target add x86_64-unknown-linux-musl --toolchain stable && sudo apt-get update && sudo apt-get install -y musl-tools'
       - name: Test and build the notification reader
         working-directory: iris-source
         run: node "$RUNNER_TEMP/iris-build-tools/scripts/ci-quiet.mjs" -- bash -e -c 'cargo test --locked --manifest-path native/notification-reader/Cargo.toml && pnpm run build:native:notification-reader && pnpm run digest:native:notification-reader'
@@ -141,6 +144,7 @@ jobs:
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: linux-x64-notification-reader
+          include-hidden-files: true
           path: iris-source/build/native/notification-reader
           retention-days: 1
 
@@ -174,16 +178,19 @@ jobs:
           cache-dependency-path: iris-source/pnpm-lock.yaml
       - name: Install dependencies
         working-directory: iris-source
-        run: node "$env:RUNNER_TEMP/iris-build-tools/scripts/ci-quiet.mjs" -- pnpm install --frozen-lockfile
+        run: node "$env:RUNNER_TEMP/iris-build-tools/scripts/ci-quiet.mjs" -- pwsh -NoProfile -Command 'pnpm install --frozen-lockfile; exit $LASTEXITCODE'
         shell: pwsh
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Install Rust stable
+        working-directory: iris-source
+        run: node "$env:RUNNER_TEMP/iris-build-tools/scripts/ci-quiet.mjs" -- pwsh -NoProfile -Command 'rustup toolchain install stable --profile minimal; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; rustup default stable; exit $LASTEXITCODE'
+        shell: pwsh
       - name: Test and build the notification reader
         working-directory: iris-source
         run: node "$env:RUNNER_TEMP/iris-build-tools/scripts/ci-quiet.mjs" -- pwsh -NoProfile -Command "cargo test --locked --manifest-path native/notification-reader/Cargo.toml; if (`$LASTEXITCODE -ne 0) { exit `$LASTEXITCODE }; pnpm run build:native:notification-reader; if (`$LASTEXITCODE -ne 0) { exit `$LASTEXITCODE }; pnpm run digest:native:notification-reader; exit `$LASTEXITCODE"
         shell: pwsh
       - name: Build isolated desktop helper and fixture
         working-directory: iris-source
-        run: node "$env:RUNNER_TEMP/iris-build-tools/scripts/ci-quiet.mjs" -- pnpm run build:native:computer-use
+        run: node "$env:RUNNER_TEMP/iris-build-tools/scripts/ci-quiet.mjs" -- pwsh -NoProfile -Command 'pnpm run build:native:computer-use; exit $LASTEXITCODE'
         shell: pwsh
       - name: Restore the pinned release helper before checking its digest
         working-directory: iris-source
@@ -191,7 +198,7 @@ jobs:
         shell: pwsh
       - name: Build main process
         working-directory: iris-source
-        run: node "$env:RUNNER_TEMP/iris-build-tools/scripts/ci-quiet.mjs" -- pnpm run build:main
+        run: node "$env:RUNNER_TEMP/iris-build-tools/scripts/ci-quiet.mjs" -- pwsh -NoProfile -Command 'pnpm run build:main; exit $LASTEXITCODE'
         shell: pwsh
       - name: Confirm isolation contract rejects the ordinary helper
         if: inputs.nativeOnly
@@ -210,7 +217,7 @@ jobs:
       - name: Run Windows contracts and release journeys
         if: ${{ needs.resolve.outputs.native_only != 'true' }}
         working-directory: iris-source
-        run: node "$env:RUNNER_TEMP/iris-build-tools/scripts/ci-quiet.mjs" -- pnpm run test:windows
+        run: node "$env:RUNNER_TEMP/iris-build-tools/scripts/ci-quiet.mjs" -- pwsh -NoProfile -Command 'pnpm run test:windows; exit $LASTEXITCODE'
         shell: pwsh
       - name: Run Windows native desktop contracts
         if: inputs.nativeOnly
@@ -248,6 +255,7 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: windows-x64-notification-reader
+          include-hidden-files: true
           path: iris-source/build/native/notification-reader
           retention-days: 1
 
@@ -287,6 +295,7 @@ jobs:
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: macos-notification-reader
+          include-hidden-files: true
           path: iris-source/build/native/notification-reader
           retention-days: 1
 
@@ -320,16 +329,16 @@ jobs:
       - name: Install dependencies
         working-directory: iris-source
         run: node "$RUNNER_TEMP/iris-build-tools/scripts/ci-quiet.mjs" -- pnpm install --frozen-lockfile
-      - uses: dtolnay/rust-toolchain@stable
-      - name: Install Linux musl target and linker
+      - name: Install Rust stable and Linux musl target
         working-directory: iris-source
-        run: node "$RUNNER_TEMP/iris-build-tools/scripts/ci-quiet.mjs" -- bash -e -c 'rustup target add aarch64-unknown-linux-musl && sudo apt-get update && sudo apt-get install -y musl-tools'
+        run: node "$RUNNER_TEMP/iris-build-tools/scripts/ci-quiet.mjs" -- bash -e -c 'rustup toolchain install stable --profile minimal && rustup default stable && rustup target add aarch64-unknown-linux-musl --toolchain stable && sudo apt-get update && sudo apt-get install -y musl-tools'
       - name: Build and test notification reader
         working-directory: iris-source
         run: node "$RUNNER_TEMP/iris-build-tools/scripts/ci-quiet.mjs" -- bash -e -c 'cargo test --locked --manifest-path native/notification-reader/Cargo.toml && node scripts/native-notification-reader.mjs build && node scripts/native-notification-reader.mjs digest && pnpm run build:main && node scripts/run-tests.mjs --concurrency=1 test/contract/registry/notification-assets.contract.test.cjs test/flow/notification-reader.flow.test.cjs'
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: linux-arm64-notification-reader
+          include-hidden-files: true
           path: iris-source/build/native/notification-reader
           retention-days: 1
 
@@ -363,10 +372,9 @@ jobs:
       - name: Install dependencies
         working-directory: iris-source
         run: node "$RUNNER_TEMP/iris-build-tools/scripts/ci-quiet.mjs" -- pnpm install --frozen-lockfile
-      - uses: dtolnay/rust-toolchain@stable
-      - name: Install Linux musl target and linker
+      - name: Install Rust stable and Linux musl target
         working-directory: iris-source
-        run: node "$RUNNER_TEMP/iris-build-tools/scripts/ci-quiet.mjs" -- bash -e -c 'rustup target add x86_64-unknown-linux-musl && sudo apt-get update && sudo apt-get install -y musl-tools'
+        run: node "$RUNNER_TEMP/iris-build-tools/scripts/ci-quiet.mjs" -- bash -e -c 'rustup toolchain install stable --profile minimal && rustup default stable && rustup target add x86_64-unknown-linux-musl --toolchain stable && sudo apt-get update && sudo apt-get install -y musl-tools'
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
           pattern: '*-notification-reader'
@@ -380,10 +388,11 @@ jobs:
           script_path="$RUNNER_TEMP/iris-ci-payload.sh"
           cat > "$script_path" <<'SCRIPT'
           set -euo pipefail
-          release_key="$(node scripts/generate-release-key.mjs)"
-          release_id="$(node -e 'process.stdout.write(require("node:crypto").randomBytes(32).toString("base64url"))')"
-          IRIS_RELEASE_KEY="$release_key" IRIS_RELEASE_ID="$release_id" pnpm run build:release
-          IRIS_RELEASE_KEY="$release_key" IRIS_RELEASE_ID="$release_id" node --test test/contract/registry/notification-assets.contract.test.cjs
+          export IRIS_RELEASE_KEY="$(node scripts/generate-release-key.mjs)"
+          export IRIS_RELEASE_ID="$(node -e 'process.stdout.write(require("node:crypto").randomBytes(32).toString("base64url"))')"
+          quiet="$RUNNER_TEMP/iris-build-tools/scripts/ci-quiet.mjs"
+          node "$quiet" -- pnpm run build:release
+          node "$quiet" -- node --test test/contract/registry/notification-assets.contract.test.cjs
           SCRIPT
           node "$RUNNER_TEMP/iris-build-tools/scripts/ci-quiet.mjs" -- bash "$script_path"
 
