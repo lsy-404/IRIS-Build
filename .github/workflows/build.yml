@@ -362,6 +362,7 @@ jobs:
 
   shell-build:
     needs: shell-check
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
