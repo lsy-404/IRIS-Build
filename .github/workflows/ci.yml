@@ -15,12 +15,16 @@ on:
         description: Run only Windows native control verification
         type: boolean
         default: false
+      releaseOnly:
+        description: Run only Windows release journeys
+        type: boolean
+        default: false
 
 permissions:
   contents: read
 
 concurrency:
-  group: iris-ci-${{ inputs.nativeOnly == true && 'native' || 'full' }}
+  group: iris-ci-${{ inputs.releaseOnly == true && 'release' || inputs.nativeOnly == true && 'native' || 'full' }}
   cancel-in-progress: true
 
 env:
@@ -37,6 +41,7 @@ jobs:
     outputs:
       source_sha: ${{ steps.source.outputs.source_sha }}
       native_only: ${{ steps.source.outputs.native_only }}
+      release_only: ${{ steps.source.outputs.release_only }}
       property_runs: ${{ steps.source.outputs.property_runs }}
     steps:
       - name: Checkout trusted CI tools
@@ -70,6 +75,7 @@ jobs:
           EVENT_SOURCE_SHA: ${{ github.event.client_payload.source_sha }}
           INPUT_SOURCE_SHA: ${{ inputs.source_sha }}
           INPUT_NATIVE_ONLY: ${{ inputs.nativeOnly }}
+          INPUT_RELEASE_ONLY: ${{ inputs.releaseOnly }}
         run: |
           set -euo pipefail
           if [[ "$EVENT_NAME" == schedule ]]; then
@@ -84,13 +90,16 @@ jobs:
           source_sha="${source_sha,,}"
           native_only=false
           [[ "$INPUT_NATIVE_ONLY" == true ]] && native_only=true
+          release_only=false
+          [[ "$INPUT_RELEASE_ONLY" == true ]] && release_only=true
+          [[ "$native_only" != true || "$release_only" != true ]] || exit 1
           property_runs=100
           [[ "$EVENT_NAME" == schedule ]] && property_runs=1000
-          printf 'source_sha=%s\nnative_only=%s\nproperty_runs=%s\n' "$source_sha" "$native_only" "$property_runs" >> "$GITHUB_OUTPUT"
+          printf 'source_sha=%s\nnative_only=%s\nrelease_only=%s\nproperty_runs=%s\n' "$source_sha" "$native_only" "$release_only" "$property_runs" >> "$GITHUB_OUTPUT"
 
   verify:
     needs: resolve
-    if: needs.resolve.outputs.native_only != 'true'
+    if: needs.resolve.outputs.native_only != 'true' && needs.resolve.outputs.release_only != 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
@@ -180,22 +189,27 @@ jobs:
         run: node "$env:RUNNER_TEMP/iris-build-tools/scripts/ci-quiet.mjs" -- pwsh -NoProfile -Command 'pnpm install --frozen-lockfile; exit $LASTEXITCODE'
         shell: pwsh
       - name: Install Rust stable
+        if: needs.resolve.outputs.release_only != 'true'
         working-directory: iris-source
         run: node "$env:RUNNER_TEMP/iris-build-tools/scripts/ci-quiet.mjs" -- pwsh -NoProfile -Command 'rustup toolchain install stable --profile minimal; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; rustup default stable; exit $LASTEXITCODE'
         shell: pwsh
       - name: Test and build the notification reader
+        if: needs.resolve.outputs.release_only != 'true'
         working-directory: iris-source
         run: node "$env:RUNNER_TEMP/iris-build-tools/scripts/ci-quiet.mjs" -- pwsh -NoProfile -Command "cargo test --locked --manifest-path native/notification-reader/Cargo.toml; if (`$LASTEXITCODE -ne 0) { exit `$LASTEXITCODE }; pnpm run build:native:notification-reader; if (`$LASTEXITCODE -ne 0) { exit `$LASTEXITCODE }; pnpm run digest:native:notification-reader; exit `$LASTEXITCODE"
         shell: pwsh
       - name: Build isolated desktop helper and fixture
+        if: needs.resolve.outputs.release_only != 'true'
         working-directory: iris-source
         run: node "$env:RUNNER_TEMP/iris-build-tools/scripts/ci-quiet.mjs" -- pwsh -NoProfile -Command 'pnpm run build:native:computer-use; exit $LASTEXITCODE'
         shell: pwsh
       - name: Restore the pinned release helper before checking its digest
+        if: needs.resolve.outputs.release_only != 'true'
         working-directory: iris-source
         run: node "$env:RUNNER_TEMP/iris-build-tools/scripts/ci-quiet.mjs" -- git restore -- native/computer-use-windows/prebuilt
         shell: pwsh
       - name: Build main process
+        if: needs.resolve.outputs.release_only != 'true'
         working-directory: iris-source
         run: node "$env:RUNNER_TEMP/iris-build-tools/scripts/ci-quiet.mjs" -- pwsh -NoProfile -Command 'pnpm run build:main; exit $LASTEXITCODE'
         shell: pwsh
@@ -214,9 +228,14 @@ jobs:
           '@ | Set-Content -LiteralPath $scriptPath
           node "$env:RUNNER_TEMP/iris-build-tools/scripts/ci-quiet.mjs" -- pwsh -NoProfile -File $scriptPath
       - name: Run Windows contracts and release journeys
-        if: ${{ needs.resolve.outputs.native_only != 'true' }}
+        if: needs.resolve.outputs.native_only != 'true' && needs.resolve.outputs.release_only != 'true'
         working-directory: iris-source
         run: node "$env:RUNNER_TEMP/iris-build-tools/scripts/ci-quiet.mjs" -- pwsh -NoProfile -Command 'pnpm run test:windows; exit $LASTEXITCODE'
+        shell: pwsh
+      - name: Run Windows release journeys
+        if: needs.resolve.outputs.release_only == 'true'
+        working-directory: iris-source
+        run: node "$env:RUNNER_TEMP/iris-build-tools/scripts/ci-quiet.mjs" -- pwsh -NoProfile -Command 'pnpm run test:release-behavior; exit $LASTEXITCODE'
         shell: pwsh
       - name: Run Windows native desktop contracts
         if: inputs.nativeOnly
@@ -251,6 +270,7 @@ jobs:
           '@ | Set-Content -LiteralPath $scriptPath
           node "$env:RUNNER_TEMP/iris-build-tools/scripts/ci-quiet.mjs" -- pwsh -NoProfile -File $scriptPath
       - name: Upload production notification reader
+        if: needs.resolve.outputs.release_only != 'true'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: windows-x64-notification-reader
@@ -260,7 +280,7 @@ jobs:
 
   native-macos:
     needs: resolve
-    if: needs.resolve.outputs.native_only != 'true'
+    if: needs.resolve.outputs.native_only != 'true' && needs.resolve.outputs.release_only != 'true'
     runs-on: macos-14
     timeout-minutes: 30
     steps:
@@ -299,7 +319,7 @@ jobs:
 
   native-linux-arm64:
     needs: resolve
-    if: needs.resolve.outputs.native_only != 'true'
+    if: needs.resolve.outputs.native_only != 'true' && needs.resolve.outputs.release_only != 'true'
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 30
     steps:
@@ -341,7 +361,7 @@ jobs:
 
   notification-core-payload:
     needs: [resolve, verify, windows, native-macos, native-linux-arm64]
-    if: needs.resolve.outputs.native_only != 'true'
+    if: needs.resolve.outputs.native_only != 'true' && needs.resolve.outputs.release_only != 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
@@ -394,7 +414,7 @@ jobs:
 
   performance-reference:
     needs: resolve
-    if: needs.resolve.outputs.native_only != 'true'
+    if: needs.resolve.outputs.native_only != 'true' && needs.resolve.outputs.release_only != 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
