@@ -14,7 +14,7 @@
 - [x] Validate the workflow with actionlint and inspect the focused diff.
 - [x] Build and deploy the updated image while the runner is idle.
 - [x] Execute existing core build checks and Linux native compilation against an exact source commit in the isolated container.
-- [ ] Fetch again, inspect branch protection/rulesets, integrate the focused changes, and push.
+- [x] Fetch again, inspect branch protection/rulesets, integrate the focused changes, and push.
 
 ## Findings
 
@@ -45,3 +45,10 @@
 - Cleared only the created acceptance source, temporary pnpm installation, and helper. Removed the temporary container and recreated the registered runner with the new image; its existing identity and isolated repository home were retained.
 - GitHub reports ionos5-iris-ci online and idle; its log confirms Listening for Jobs. Private successful logs contain zero entries, no acceptance source remains, and gh/musl-gcc are present in the active container.
 - All final OOM counters are zero. The common resource slice and existing application services are active. Other IRIS-Build worktrees are clean, with no inactive uncommitted files requiring recovery.
+- Committed f81be20, fetched again with no new remote-base changes, rechecked main protection and rulesets, and fast-forwarded the clean main checkout. Pushed the verified implementation to origin/main.
+
+## Result
+
+- Core and Linux x64 notification-reader jobs now select the common self-hosted pool. Windows, macOS, and Linux ARM64 native jobs retain their matching hosted machines.
+- Exact-source core compilation, renderer compilation, native protocol/build/digest checks, and existing release static/behavior checks all pass on IONOS #5 within the unchanged aggregate resource budget.
+- The active runner uses the updated image, is online, and accepts jobs. Future production core workflows retain the existing release gates and publication steps.
