@@ -5,6 +5,7 @@
 - Move the existing core build and Linux x64 notification-reader job to the common IONOS runner pool. Keep native Windows, macOS, and ARM64 builds on their existing matching hosts.
 - Preserve release inputs, gates, artifact contracts, and publication behavior. Do not add workflows or test cases to IRIS source.
 - Adapt tools and cleanup for the persistent unprivileged container. Verify real compilation on the host without reserving or publishing a new production release solely for runner acceptance.
+- The user subsequently requested a complete production core workflow from latest main. Execute the existing release path, including its normal publication steps, and verify actual self-hosted execution rather than treating a skipped job as acceptance.
 
 ## Plan
 
@@ -15,6 +16,9 @@
 - [x] Build and deploy the updated image while the runner is idle.
 - [x] Execute existing core build checks and Linux native compilation against an exact source commit in the isolated container.
 - [x] Fetch again, inspect branch protection/rulesets, integrate the focused changes, and push.
+- [x] Dispatch the complete core workflow using current IRIS main and current IRIS-Build main.
+- [ ] Resolve any workflow blocker within the authorized release path and confirm the core job actually runs on IONOS #5.
+- [ ] Verify all required jobs and publication steps pass, inspect final cleanup, and record the live run.
 
 ## Findings
 
@@ -46,6 +50,11 @@
 - GitHub reports ionos5-iris-ci online and idle; its log confirms Listening for Jobs. Private successful logs contain zero entries, no acceptance source remains, and gh/musl-gcc are present in the active container.
 - All final OOM counters are zero. The common resource slice and existing application services are active. Other IRIS-Build worktrees are clean, with no inactive uncommitted files requiring recovery.
 - Committed f81be20, fetched again with no new remote-base changes, rechecked main protection and rulesets, and fast-forwarded the clean main checkout. Pushed the verified implementation to origin/main.
+- Live acceptance begins from IRIS source main 784cd98de2439d8bcfd2afbf2ff44e125699e05f and IRIS-Build main a849e6e4f6583219d972f2b8a68e226ceea2aec5. The existing runner (ID 21) is online and idle. Unrelated IRIS .iris/mcp.json edits remain untouched.
+- The supplied billing failure is IRIS model-data.yml run 38384327653, publish job 115252234604, with ubuntu-24.04 labels and no started steps. It is distinct from the independently dispatched IRIS-Build core workflow.
+- A job annotations request returned 404 because annotations belong to its check run -> resolved the job's check_run_url for the correct read. No account billing settings were changed.
+- Complete core run 38478472026 was dispatched at 22:32:24 UTC from a849e6e with source 784cd98de. It failed at startup with zero jobs. REST exposed no check runs -> inspected its public Actions summary -> GitHub rejected dtolnay/rust-toolchain under the repository's selected-actions policy (only owned/GitHub/actions/* repositories are allowed).
+- Replaced the disallowed action with the official rustup bootstrap and the existing stable toolchain commands. Repository security policy stays intact; no additional workflows or test cases are introduced.
 
 ## Result
 

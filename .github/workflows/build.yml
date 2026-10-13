@@ -642,9 +642,14 @@ jobs:
           package-manager-cache: false
       - name: Setup Rust
         if: runner.os != 'macOS'
-        uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249
-        with:
-          toolchain: stable
+        run: |
+          if ! command -v rustup >/dev/null 2>&1; then
+            curl --proto '=https' --tlsv1.2 --retry 3 --location --silent --show-error --fail https://sh.rustup.rs | sh -s -- --default-toolchain none --no-modify-path -y
+            export PATH="$HOME/.cargo/bin:$PATH"
+            printf '%s\n' "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          fi
+          rustup toolchain install stable --profile minimal
+          rustup default stable
       - name: Install Linux Rust target
         if: runner.os == 'Linux'
         run: rustup target add '${{ matrix.target }}' --toolchain stable
