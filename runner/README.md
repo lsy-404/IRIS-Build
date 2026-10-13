@@ -1,9 +1,23 @@
-# IRIS CI runner
+# Shared CI runners
 
-The single Linux CI job runs in an Ubuntu 24.04 container with two CPUs and 4 GiB of memory. The container exposes no ports and mounts only its own named volume. Runner updates remain enabled.
+Repository runners share one Ubuntu 24.04 host, image, and resource budget. Each registration has an isolated home and package cache. All runners together use at most two CPUs, 4 GiB RAM, and 12 GiB swap; the host retains the remaining RAM and swap for its applications. The shared CI filesystem reserves 100 GiB, and each container exposes no ports or Docker socket. Runner updates remain enabled.
 
-Build the image with `docker compose build`. Register it with `docker compose run --rm -T runner ./config.sh` using a short-lived repository registration token, the name `ionos5-iris-ci`, the label `iris-ci`, and work directory `_work`. Supply the token through standard input to a shell wrapper so it stays out of shell history. Then start with `docker compose up -d`.
+On a new host, create the CI filesystem without overwriting an existing image:
 
-Use `docker compose logs --tail 50 runner` for status and `docker compose stop` to stop accepting jobs. Configuration and package caches persist in `iris-ci-runner-home`; removing that volume requires registration again. CI clears the source workspace before and after each job.
+```sh
+test ! -e /var/lib/ci-runner.img
+fallocate -l 100G /var/lib/ci-runner.img
+mkfs.ext4 -q -m 0 -E nodiscard -L ci-runner-data /var/lib/ci-runner.img
+install -d /srv/ci-runners
+printf '%s\n' '/var/lib/ci-runner.img /srv/ci-runners ext4 loop,nodev,nosuid,nofail,X-fstrim.notrim 0 0' >> /etc/fstab
+mount /srv/ci-runners
+install -m 0644 ci.slice /etc/systemd/system/ci.slice
+systemctl daemon-reload
+systemctl enable --now ci.slice
+```
 
-Only trusted dispatches on the repository default branch may use this runner. Build and publication jobs use their existing runners.
+Keep one copy of these deployment files on the host. For each repository, copy `.env.example` to `instances/<repository>.env`. Set a unique `RUNNER_NAME` and its `RUNNER_REPOSITORY`, create `/srv/ci-runners/$RUNNER_NAME` owned by UID 1001/GID 123 with mode 750, and run `docker compose --env-file instances/<repository>.env build`. Pipe its short-lived repository registration token to `bash register.sh instances/<repository>.env`; it is read from standard input and is never stored in the deployment files.
+
+Jobs select `[self-hosted, linux, x64, ci]`. Only trusted jobs may use the pool; a personal GitHub account requires a separate registration for each repository. IRIS uses its existing single verification job and clears its source workspace before and after execution.
+
+Use `docker compose --env-file instances/<repository>.env logs --tail 50 runner` for status and the same command with `stop` to stop accepting jobs. Container configuration and caches persist in its repository home; deleting that home requires registration again. The named volume contains only that repository's directory from the shared CI filesystem.

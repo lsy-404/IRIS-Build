@@ -1,0 +1,14 @@
+[Unit]
+Description=Shared CI runners
+
+[Slice]
+CPUAccounting=yes
+MemoryAccounting=yes
+CPUQuota=200%
+CPUWeight=25
+MemoryMax=4G
+MemorySwapMax=12G
+TasksMax=1536
+
+[Install]
+WantedBy=multi-user.target

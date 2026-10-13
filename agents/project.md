@@ -17,7 +17,7 @@
 - `.github/workflows/build.yml`：core、shell-check、shell-build、shell-build-macos 构建（shell 构建只提交 macOS 签名请求，不发布）
 - `.github/workflows/publish-shell.yml`：等待签名中心签名、验证并发布 shell 全部平台资产
 - `scripts/`：macOS 签名请求提交与 shell 发布脚本
-- `runner/`：Ubuntu 测试 runner 的隔离容器与资源限制；仅用于 `ci.yml` 单作业
+- `runner/`：通用 Ubuntu CI runner 的隔离容器、共享磁盘与资源池；各仓库独立注册，IRIS 使用 `ci.yml` 单作业
 - `.github/scripts/`：安装、构建、发布、版本与工作流报告脚本
 
 ## 相关约束

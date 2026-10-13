@@ -1,20 +1,24 @@
-name: iris-ci
+name: ${RUNNER_NAME:?Set RUNNER_NAME}
 
 services:
   runner:
     build: .
-    image: iris-ci-runner:2.338.0
-    container_name: iris-ci-runner
+    image: ci-runner:2.338.0
+    container_name: ${RUNNER_NAME:?Set RUNNER_NAME}
     command: ["./run.sh"]
     init: true
     restart: unless-stopped
+    cgroup_parent: ci.slice
     cpus: 2
     cpu_shares: 256
     mem_limit: 4g
-    memswap_limit: 4g
+    memswap_limit: 16g
     pids_limit: 512
     shm_size: 512m
     oom_score_adj: 500
+    environment:
+      RUNNER_NAME: ${RUNNER_NAME:?Set RUNNER_NAME}
+      RUNNER_REPOSITORY: ${RUNNER_REPOSITORY:?Set RUNNER_REPOSITORY}
     volumes:
       - runner-home:/home/runner
     logging:
@@ -25,4 +29,8 @@ services:
 
 volumes:
   runner-home:
-    name: iris-ci-runner-home
+    name: ${RUNNER_NAME}-home
+    driver_opts:
+      type: none
+      o: bind
+      device: /srv/ci-runners/${RUNNER_NAME}

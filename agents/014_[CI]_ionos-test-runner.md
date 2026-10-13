@@ -6,6 +6,7 @@
 - Keep one Ubuntu test job and its existing checks. Build and publication jobs remain outside this change.
 - Use an isolated runner environment with bounded resources and no access to production service credentials.
 - Do not add test cases. Validate workflow syntax and execute the existing CI against an exact source commit on the deployed runner.
+- The user expanded scope to a shared CI host for multiple projects, with a larger default workspace and swap allowance. Prepare common deployment defaults and separate repository registrations; keep the ongoing acceptance run intact.
 
 ## Plan
 
@@ -13,8 +14,10 @@
 - [x] Inspect both authorized servers and select a host using current capacity and service evidence.
 - [x] Install and register an isolated runner with resource limits and automatic startup.
 - [x] Route the single CI job to the runner and adapt environment setup and cleanup for repeated jobs.
-- [ ] Validate workflow syntax, fetch remote changes, inspect protection and rulesets, integrate and push.
-- [ ] Dispatch the existing CI, verify the actual runner and all checks, and record final host/service state.
+- [x] Validate workflow syntax, fetch remote changes, inspect protection and rulesets, integrate and push.
+- [x] Dispatch the existing CI, verify the actual runner and all checks, and record final host/service state.
+- [x] Reserve a larger shared CI workspace and increase the default swap allowance while preserving production headroom.
+- [ ] Generalize the runner deployment for multiple repository registrations and connect the additional repositories selected by the user.
 
 ## Findings
 
@@ -30,6 +33,8 @@
 - Runner ionos5-iris-ci (repository ID 21) is online, idle, and labeled self-hosted/Linux/X64/iris-ci. The runner operates as the container's unprivileged runner user.
 - Docker inspection confirms two CPUs, 4 GiB memory and matching memory+swap limit, 512-process limit, no published ports, and one private named volume. Restart policy is unless-stopped; runner automatic updates remain enabled.
 - No remote IRIS-Build commits were added after the task base. Main protection returns HTTP 404 and the ruleset list is empty. IRIS source advanced to a3033ad60; the acceptance run will use that exact current commit.
+- GitHub owner lsy-404 is a personal User account. An organization-level registration cannot serve these personal repositories; share the host/image/resource budget using separate repository-scoped runner registrations.
+- The host has an ext4 root filesystem with approximately 143 GiB free and an existing 16 GiB swap file. The initial container memory+swap limit equaled RAM and therefore disallowed swap; expanded scope requires increasing that limit.
 
 ## Progress
 
@@ -44,3 +49,19 @@
 - Image build and Docker Compose validation passed. Registered the runner with an hour-lived GitHub token passed through SSH standard input; no token was saved in local files or printed.
 - Started the container with Docker Compose. GitHub reports online and the application reports Listening for Jobs.
 - actionlint and git diff --check pass. The existing ci-quiet Node test file passes 3/3. No new tests were added.
+- Git's global /agents ignore rule rejected initial staging -> explicitly staged only this task's audit and existing project/task index files with -f -> commit succeeded.
+- Committed 207cd01, fetched again, confirmed no new remote base commits, and fast-forwarded the clean main worktree. Pushed main after confirming it is unprotected and has no rulesets.
+- Manually dispatched ci.yml only with source SHA a3033ad60b147d6ae25a13f3cc1597496486299b. Acceptance run 38428337554 is in progress; GitHub reports the self-hosted runner online and busy.
+- Actual execution passed dependency setup, typecheck/lint, and repository contracts. The full test process advanced into real flow tests. Memory OOM counters and container restart count remained zero; the container reclaimed cache at its 4 GiB limit.
+- Queried organization runner endpoints before confirming account type -> HTTP 404 because lsy-404 is a personal account -> use per-repository registration on the common CI host.
+- Asked which additional repositories should be connected first. Common disk/swap preparation can proceed independently of that selection.
+- IRIS acceptance run 38428337554 succeeded on ionos5-iris-ci in 11m55s. Every step, including full tests, source cleanup, and checkout post-actions, passed.
+- Raised the existing container's memory+swap limit live to 16 GiB (4 GiB RAM plus up to 12 GiB swap), reusing the host's existing swap file without affecting the completed test.
+- Generalized Compose to per-repository names and bind-backed private volumes on a shared 100 GiB filesystem. Added a common ci.slice so additional registrations share the same total CPU/RAM/swap ceiling instead of multiplying production-host limits.
+- Added a registration wrapper that consumes an hour-lived repository token through stdin and uses the common ci label. Each repository keeps its own runner credentials and cache directory.
+- Verified completed-job cleanup: the source workspace contains zero entries and the temporary build tools/npm directory are absent. OOM counters remained zero, and existing application services remained active.
+- Created and mounted the separate 100 GiB CI filesystem and enabled the shared ci.slice. Kernel values confirm the 4 GiB RAM, 12 GiB swap, and two-CPU aggregate caps.
+- Stopped only the idle runner, copied its 2.4 GiB home/cache to the private directory on the CI filesystem, byte-compared its registration and credential files, and restarted it using the common deployment profile. GitHub reports the same runner ID online and idle.
+- Initial mkfs discarded unused backing-file allocation -> preserve the actual 100 GiB reservation with a fresh fallocate and X-fstrim.notrim -> future setup uses mkfs -E nodiscard. Verified the notrim behavior from the installed util-linux manpage.
+- The host does not have rg installed -> used grep for its local fstrim documentation. No packages were added to the production host for this probe.
+- The post-migration runner is online; its private home is on the 98 GiB usable CI filesystem and its cgroup permits 4 GiB memory plus 12 GiB swap. Credential private-key permissions remain 600.
