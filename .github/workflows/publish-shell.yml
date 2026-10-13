@@ -173,7 +173,6 @@ jobs:
       actions: write
       contents: write
     env:
-      SOURCE_SHA: ${{ needs.resolve.outputs.source_sha }}
       IRIS_SOURCE_SHA: ${{ needs.resolve.outputs.source_sha }}
     steps:
       - name: Reject workflow reruns
@@ -196,13 +195,13 @@ jobs:
           IRIS_RELEASE_KEY_TRANSFER_KEY: ${{ secrets.IRIS_RELEASE_KEY_TRANSFER_KEY }}
           IRIS_CONTEXT_SEAL_KEY: ${{ secrets.IRIS_CONTEXT_SEAL_KEY }}
         run: |
-          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]] || exit 1
+          [[ "$IRIS_SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]] || exit 1
           [[ -n "$IRIS_BUILD_DEPLOY_KEY" && -n "$IRIS_TAG_DEPLOY_KEY" && -n "$IRIS_RELEASE_UPLOAD_TOKEN" && -n "$IRIS_RELEASE_KEY_TRANSFER_KEY" && "${#IRIS_CONTEXT_SEAL_KEY}" -ge 32 ]] || { echo 'required secrets are missing' >&2; exit 1; }
       - name: Checkout exact private source
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
           repository: lsy-404/IRIS
-          ref: ${{ env.SOURCE_SHA }}
+          ref: ${{ env.IRIS_SOURCE_SHA }}
           path: iris-source
           ssh-key: ${{ secrets.IRIS_BUILD_DEPLOY_KEY }}
           persist-credentials: false
@@ -291,7 +290,7 @@ jobs:
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
           repository: lsy-404/IRIS
-          ref: ${{ env.SOURCE_SHA }}
+          ref: ${{ env.IRIS_SOURCE_SHA }}
           path: tag-source
           ssh-key: ${{ secrets.IRIS_TAG_DEPLOY_KEY }}
           persist-credentials: true

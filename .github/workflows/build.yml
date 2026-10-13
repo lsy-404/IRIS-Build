@@ -27,7 +27,6 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  SOURCE_SHA: ${{ github.event.client_payload.source_sha || inputs.source_sha }}
   IRIS_SOURCE_SHA: ${{ github.event.client_payload.source_sha || inputs.source_sha }}
   IRIS_LICENSE_API_URL: https://iris.voidcarve.com
   IRIS_LICENSE_BUILD_API_ORIGIN: https://iris.voidcarve.com
@@ -45,6 +44,8 @@ jobs:
     permissions:
       contents: read
       actions: read
+    outputs:
+      build: ${{ steps.gate.outputs.build }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
@@ -56,6 +57,7 @@ jobs:
           node-version: 24
           package-manager-cache: false
       - name: Check pending shell publication
+        id: gate
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: node .release-tools/scripts/publish-shell.mjs gate
@@ -66,7 +68,7 @@ jobs:
     permissions:
       actions: read
       contents: write
-    if: (github.event_name == 'repository_dispatch' && github.event.action == 'iris-build' && github.event.client_payload.build_kind == 'core') || (github.event_name == 'workflow_dispatch' && inputs.kind == 'core')
+    if: needs.release-gate.outputs.build == 'true' && ((github.event_name == 'repository_dispatch' && github.event.action == 'iris-build' && github.event.client_payload.build_kind == 'core') || (github.event_name == 'workflow_dispatch' && inputs.kind == 'core'))
     runs-on: ubuntu-latest
     outputs:
       core_version: ${{ steps.number.outputs.core_version }}
@@ -81,7 +83,7 @@ jobs:
           IRIS_TAG_DEPLOY_KEY: ${{ secrets.IRIS_TAG_DEPLOY_KEY }}
           IRIS_RELEASE_UPLOAD_TOKEN: ${{ secrets.IRIS_RELEASE_UPLOAD_TOKEN }}
         run: |
-          [[ "$SOURCE_SHA" =~ ^[0-9a-fA-F]{40}$ ]] || { echo 'source_sha must be a 40-character commit SHA' >&2; exit 1; }
+          [[ "$IRIS_SOURCE_SHA" =~ ^[0-9a-fA-F]{40}$ ]] || { echo 'source_sha must be a 40-character commit SHA' >&2; exit 1; }
           [[ -n "$IRIS_BUILD_DEPLOY_KEY" && -n "$IRIS_TAG_DEPLOY_KEY" && -n "$IRIS_RELEASE_UPLOAD_TOKEN" ]] || { echo 'required secrets are missing' >&2; exit 1; }
       - name: Setup Node.js
         uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
@@ -92,7 +94,7 @@ jobs:
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
           repository: lsy-404/IRIS
-          ref: ${{ env.SOURCE_SHA }}
+          ref: ${{ env.IRIS_SOURCE_SHA }}
           path: iris-source
           ssh-key: ${{ secrets.IRIS_BUILD_DEPLOY_KEY }}
           persist-credentials: false
@@ -151,7 +153,7 @@ jobs:
             gh api --method POST "repos/$GITHUB_REPOSITORY/dispatches" \
               -f event_type=iris-build \
               -f 'client_payload[build_kind]=shell' \
-              -f "client_payload[source_sha]=$SOURCE_SHA"
+              -f "client_payload[source_sha]=$IRIS_SOURCE_SHA"
           fi
       - name: Reserve core version
         id: number
@@ -213,7 +215,7 @@ jobs:
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
           repository: lsy-404/IRIS
-          ref: ${{ env.SOURCE_SHA }}
+          ref: ${{ env.IRIS_SOURCE_SHA }}
           path: tag-source
           ssh-key: ${{ secrets.IRIS_TAG_DEPLOY_KEY }}
           persist-credentials: true
@@ -247,10 +249,10 @@ jobs:
     permissions:
       actions: read
       contents: read
-    if: (github.event_name == 'repository_dispatch' && github.event.action == 'iris-build' && github.event.client_payload.build_kind == 'shell') || (github.event_name == 'workflow_dispatch' && inputs.kind == 'shell')
+    if: needs.release-gate.outputs.build == 'true' && ((github.event_name == 'repository_dispatch' && github.event.action == 'iris-build' && github.event.client_payload.build_kind == 'shell') || (github.event_name == 'workflow_dispatch' && inputs.kind == 'shell'))
     runs-on: ubuntu-latest
     outputs:
-      source_sha: ${{ env.SOURCE_SHA }}
+      source_sha: ${{ env.IRIS_SOURCE_SHA }}
       shell_version: ${{ steps.prepare.outputs.shell_version }}
       release_envelope: ${{ steps.key.outputs.envelope }}
       release_id: ${{ steps.key.outputs.release_id }}
@@ -270,12 +272,12 @@ jobs:
           IRIS_RELEASE_KEY_TRANSFER_KEY: ${{ secrets.IRIS_RELEASE_KEY_TRANSFER_KEY }}
           IRIS_CONTEXT_SEAL_KEY: ${{ secrets.IRIS_CONTEXT_SEAL_KEY }}
         run: |
-          [[ "$SOURCE_SHA" =~ ^[0-9a-fA-F]{40}$ ]] || exit 1
+          [[ "$IRIS_SOURCE_SHA" =~ ^[0-9a-fA-F]{40}$ ]] || exit 1
           [[ -n "$IRIS_BUILD_DEPLOY_KEY" && -n "$IRIS_TAG_DEPLOY_KEY" && -n "$IRIS_RELEASE_UPLOAD_TOKEN" && -n "$IRIS_RELEASE_KEY_TRANSFER_KEY" && "${#IRIS_CONTEXT_SEAL_KEY}" -ge 32 ]] || { echo 'required secrets are missing' >&2; exit 1; }
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
           repository: lsy-404/IRIS
-          ref: ${{ env.SOURCE_SHA }}
+          ref: ${{ env.IRIS_SOURCE_SHA }}
           path: iris-source
           ssh-key: ${{ secrets.IRIS_BUILD_DEPLOY_KEY }}
           persist-credentials: false
@@ -421,7 +423,6 @@ jobs:
           IRIS_CORE_BUILD: ${{ needs.shell-check.outputs.core_build }}
           IRIS_CORE_VERSION: ${{ needs.shell-check.outputs.core_version }}
           IRIS_INTERNAL_VERSION: ${{ needs.shell-check.outputs.internal_version }}
-          IRIS_SOURCE_SHA: ${{ needs.shell-check.outputs.source_sha }}
           IRIS_LICENSE_BUILD_API_ORIGIN: https://iris.voidcarve.com
           IRIS_RELEASE_UPLOAD_TOKEN: ${{ secrets.IRIS_RELEASE_UPLOAD_TOKEN }}
           DIST_CMD: ${{ matrix.dist_cmd }}
@@ -506,7 +507,6 @@ jobs:
           IRIS_CORE_BUILD: ${{ needs.shell-check.outputs.core_build }}
           IRIS_CORE_VERSION: ${{ needs.shell-check.outputs.core_version }}
           IRIS_INTERNAL_VERSION: ${{ needs.shell-check.outputs.internal_version }}
-          IRIS_SOURCE_SHA: ${{ needs.shell-check.outputs.source_sha }}
           IRIS_LICENSE_BUILD_API_ORIGIN: https://iris.voidcarve.com
           IRIS_RELEASE_UPLOAD_TOKEN: ${{ secrets.IRIS_RELEASE_UPLOAD_TOKEN }}
           DIST_CMD: pnpm run dist:mac --publish never
@@ -581,7 +581,7 @@ jobs:
 
   notification-readers:
     needs: release-gate
-    if: (github.event_name == 'repository_dispatch' && github.event.action == 'iris-build' && (github.event.client_payload.build_kind == 'core' || github.event.client_payload.build_kind == 'shell')) || (github.event_name == 'workflow_dispatch' && (inputs.kind == 'core' || inputs.kind == 'shell'))
+    if: needs.release-gate.outputs.build == 'true' && ((github.event_name == 'repository_dispatch' && github.event.action == 'iris-build' && (github.event.client_payload.build_kind == 'core' || github.event.client_payload.build_kind == 'shell')) || (github.event_name == 'workflow_dispatch' && (inputs.kind == 'core' || inputs.kind == 'shell')))
     env:
       WORKFLOW_REPORT_TOKEN: ${{ secrets.IRIS_RELEASE_UPLOAD_TOKEN }}
     strategy:
@@ -615,12 +615,12 @@ jobs:
           persist-credentials: false
       - name: Validate source commit
         working-directory: .
-        run: '[[ "$SOURCE_SHA" =~ ^[0-9a-fA-F]{40}$ ]] || { echo "source_sha must be a 40-character commit SHA" >&2; exit 1; }'
+        run: '[[ "$IRIS_SOURCE_SHA" =~ ^[0-9a-fA-F]{40}$ ]] || { echo "source_sha must be a 40-character commit SHA" >&2; exit 1; }'
       - name: Checkout exact private source
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
           repository: lsy-404/IRIS
-          ref: ${{ env.SOURCE_SHA }}
+          ref: ${{ env.IRIS_SOURCE_SHA }}
           path: iris-source
           ssh-key: ${{ secrets.IRIS_BUILD_DEPLOY_KEY }}
           persist-credentials: false

@@ -116,9 +116,9 @@ export async function gate({ env = process.env, fetchImpl = fetch, sleep = defau
   const runId = requireRunId(env.GITHUB_RUN_ID);
   const write = summary ?? (async (text) => { if (env.GITHUB_STEP_SUMMARY) await appendFile(env.GITHUB_STEP_SUMMARY, text); });
   const blocking = await pendingBuildRun({ fetchImpl, sleep }, token, repo, runId);
-  if (blocking === null) return;
-  await write(`## Shell publish pending\n\nBuild run ${blocking} has shell installers awaiting publication. Run the shell publisher for that build, then build again.\n`);
-  throw new PublishError('SHELL_PUBLISH_PENDING');
+  if (blocking === null) return { build: true };
+  await write(`## Build skipped\n\nBuild run ${blocking} has shell installers awaiting publication. Run the shell publisher for that build, then build again.\n`);
+  return { build: false };
 }
 
 // Resolve: decide whether a finished build run carries a shell release.
@@ -610,7 +610,7 @@ export async function main(args = process.argv.slice(2), deps = {}) {
       || args.length > 2 || (flag !== undefined && !(command === 'context' && flag === '--public'))) throw new PublishError('INVALID_COMMAND');
     const injected = { env, fetchImpl: deps.fetchImpl, sleep: deps.sleep, now: deps.now, exec: deps.exec, log: deps.log };
     const defined = Object.fromEntries(Object.entries(injected).filter(([, value]) => value !== undefined));
-    if (command === 'gate') await gate(defined);
+    if (command === 'gate') await writeOutputs(env, await gate(defined));
     else if (command === 'resolve') await writeOutputs(env, { shell: (await resolve(defined)).shell });
     else if (command === 'context') await writeOutputs(env, contextOutputs(await readContext({ env }), { pub: flag === '--public', sealKey: env.IRIS_CONTEXT_SEAL_KEY }));
     else if (command === 'check') await writeOutputs(env, { ready: await checkSigning(defined) });

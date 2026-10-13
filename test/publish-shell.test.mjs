@@ -62,13 +62,22 @@ const gateEnv = { GITHUB_TOKEN: 't', GITHUB_REPOSITORY: 'o/r', GITHUB_RUN_ID: '5
 const contextArtifact = (runId, extra = {}) => ({ id: runId * 10, name: 'shell-release-context', expired: false, workflow_run: { id: runId }, ...extra });
 const buildRun = (extra = {}) => ({ id: 400, path: '.github/workflows/build.yml', conclusion: 'success', ...extra });
 
-test('gate rejects an unpublished release without occupying a runner to wait', async () => {
+test('gate skips an unpublished release successfully without occupying a runner to wait', async () => {
   const { state, now, sleep } = clock();
   const github = githubFake({ artifacts: [contextArtifact(400)], runs: { 400: buildRun() } });
-  const summaries = [];
-  await assert.rejects(gate({ env: gateEnv, fetchImpl: github.fetchImpl, now, sleep, summary: async (text) => summaries.push(text) }), { code: 'SHELL_PUBLISH_PENDING' });
+  const dir = await temp();
+  const output = path.join(dir, 'output');
+  const summary = path.join(dir, 'summary');
+  const errors = [];
+  const code = await main(['gate'], {
+    env: { ...gateEnv, GITHUB_OUTPUT: output, GITHUB_STEP_SUMMARY: summary },
+    fetchImpl: github.fetchImpl, now, sleep, stderr: { write: (text) => errors.push(text) },
+  });
+  assert.equal(code, 0);
+  assert.equal(await readFile(output, 'utf8'), 'build=false\n');
+  assert.deepEqual(errors, []);
   assert.equal(state.sleeps.length, 0);
-  assert.match(summaries.join(''), /400/);
+  assert.match(await readFile(summary, 'utf8'), /400/);
 });
 
 test('gate passes when nothing is pending', async () => {
@@ -83,7 +92,7 @@ test('gate passes when nothing is pending', async () => {
   };
   for (const [label, setup] of Object.entries(cases)) {
     const { state, now, sleep } = clock();
-    await gate({ env: gateEnv, fetchImpl: githubFake(setup).fetchImpl, now, sleep, summary: async () => {} });
+    assert.deepEqual(await gate({ env: gateEnv, fetchImpl: githubFake(setup).fetchImpl, now, sleep, summary: async () => {} }), { build: true }, label);
     assert.equal(state.sleeps.length, 0, label);
   }
 });
@@ -91,7 +100,7 @@ test('gate passes when nothing is pending', async () => {
 test('gate recognises a pending release when the workflow path has a ref suffix', async () => {
   const { state, now, sleep } = clock();
   const github = githubFake({ artifacts: [contextArtifact(400)], runs: { 400: buildRun({ path: '.github/workflows/build.yml@refs/heads/main' }) } });
-  await assert.rejects(gate({ env: gateEnv, fetchImpl: github.fetchImpl, now, sleep, summary: async () => {} }), { code: 'SHELL_PUBLISH_PENDING' });
+  assert.deepEqual(await gate({ env: gateEnv, fetchImpl: github.fetchImpl, now, sleep, summary: async () => {} }), { build: false });
   assert.equal(state.sleeps.length, 0);
 });
 
