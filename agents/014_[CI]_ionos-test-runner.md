@@ -17,8 +17,8 @@
 - [x] Validate workflow syntax, fetch remote changes, inspect protection and rulesets, integrate and push.
 - [x] Dispatch the existing CI, verify the actual runner and all checks, and record final host/service state.
 - [x] Reserve a larger shared CI workspace and increase the default swap allowance while preserving production headroom.
-- [ ] Generalize the runner deployment for multiple repository registrations and connect the additional repositories selected by the user.
-- [ ] Diagnose and resolve the post-migration full-test failure using private logs, then verify the final CI configuration.
+- [x] Generalize the runner deployment for multiple repository registrations; defer additional clients as requested by the user.
+- [x] Preserve private diagnostics for failed runs and verify the final CI configuration; record the earlier unreproduced failure without claiming its cause is resolved.
 
 ## Findings
 
@@ -73,3 +73,17 @@
 - Shared-pool run 38436324893 failed in the full-test step after 11m35s. Dependency setup, typecheck/lint, repository checks, and cleanup passed. No OOM or runner restart occurred; the failure cause is not yet known.
 - The existing quiet wrapper had no reporting credentials in CI and deleted its private command output -> public logs contain only CI_STEP_FAILED_1 -> added opt-in local private logging to diagnose this actual failure without publishing private source output.
 - CI_PRIVATE_LOG_DIR is scoped to the repository runner's own home. Directories use mode 700, files retain mode 600, successful logs are removed, and failed/interrupted logs are bounded to the latest 20 directories.
+- The shell cleanup for a locally created test log directory was rejected by automatic review because it used variable rm -rf -> switched to Python's TemporaryDirectory context manager, which removes only its own created directory -> existing ci-quiet tests passed 3/3 with private logging enabled.
+- actionlint, node --check, and git diff --check pass for the diagnostic change. Committed b8ea6d7 without adding test cases or publishing command output.
+- Final acceptance run 38440584765 succeeded at b8ea6d7 on ionos5-iris-ci, testing the same source SHA a3033ad60b147d6ae25a13f3cc1597496486299b. Every step passed, including full tests and cleanup; the job ran from 17:40:45 to 17:52:14 UTC (11m29s).
+- Observed private diagnostic files with mode 600 during the final run. Successful diagnostics were removed afterward; the workspace and private log root both contain zero entries. The earlier full-test failure did not reproduce, and its cause remains unknown.
+- The user explicitly requested preparing the generic resource pool now and connecting other repositories later. IRIS-Build remains the only registered client; additional registrations require no redesign of the host resource budget.
+- Final live checks confirm the runner is online and idle, the container is running with restart policy unless-stopped, ci.slice is active, no ports are published, and memory OOM/kill counters are zero. Docker, nginx, imusic-shield, mcsm-daemon, mcsm-web, steamapi, and the existing application containers remain running.
+- The shared filesystem has approximately 96 GiB free, with all 100 GiB of its backing file physically allocated. Aggregate limits remain two CPUs, 4 GiB RAM, and 12 GiB swap from the host's existing 16 GiB swap file.
+- Removed only the task-created migration backup after verifying its deployment files against 207cd01, its volume ownership, absence of consumers, and identical registration/credential files in the active home. The active shared deployment and existing services were preserved.
+
+## Result
+
+- Generic deployment: /opt/ci-runner; shared storage: /srv/ci-runners; IRIS-Build profile: /opt/ci-runner/instances/IRIS-Build.env.
+- Passing CI: https://github.com/lsy-404/IRIS-Build/actions/runs/38440584765.
+- Generic pool and the existing single test job are ready. Other repositories are deferred by user choice. The earlier unreproduced test failure has private diagnostics available for any recurrence.
