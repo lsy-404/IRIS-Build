@@ -18,6 +18,7 @@
 - [x] Dispatch the existing CI, verify the actual runner and all checks, and record final host/service state.
 - [x] Reserve a larger shared CI workspace and increase the default swap allowance while preserving production headroom.
 - [ ] Generalize the runner deployment for multiple repository registrations and connect the additional repositories selected by the user.
+- [ ] Diagnose and resolve the post-migration full-test failure using private logs, then verify the final CI configuration.
 
 ## Findings
 
@@ -65,3 +66,10 @@
 - Initial mkfs discarded unused backing-file allocation -> preserve the actual 100 GiB reservation with a fresh fallocate and X-fstrim.notrim -> future setup uses mkfs -E nodiscard. Verified the notrim behavior from the installed util-linux manpage.
 - The host does not have rg installed -> used grep for its local fstrim documentation. No packages were added to the production host for this probe.
 - The post-migration runner is online; its private home is on the 98 GiB usable CI filesystem and its cgroup permits 4 GiB memory plus 12 GiB swap. Credential private-key permissions remain 600.
+- The backing file now has its full 100 GiB physically allocated. Root storage retains 44 GiB free; the CI filesystem has approximately 96 GiB free after copying its cache. fstab excludes only the CI image from trim.
+- Shared deployment staging initially hit the global agents ignore rule again -> corrected explicit force-staging -> committed 8d5797e. Cancelled only the mistakenly dispatched prior-head validation 38436136910 and dispatched 38436324893 against the new main configuration.
+- Pushed the common ci label configuration after a fresh fetch and protection/ruleset check. Removed the obsolete iris-ci label after old runs had completed/cancelled; current CI selects the generic label.
+- No additional repository names have been supplied. The common pool and registration profile are ready for subsequent per-repository connections; the currently registered client is IRIS-Build.
+- Shared-pool run 38436324893 failed in the full-test step after 11m35s. Dependency setup, typecheck/lint, repository checks, and cleanup passed. No OOM or runner restart occurred; the failure cause is not yet known.
+- The existing quiet wrapper had no reporting credentials in CI and deleted its private command output -> public logs contain only CI_STEP_FAILED_1 -> added opt-in local private logging to diagnose this actual failure without publishing private source output.
+- CI_PRIVATE_LOG_DIR is scoped to the repository runner's own home. Directories use mode 700, files retain mode 600, successful logs are removed, and failed/interrupted logs are bounded to the latest 20 directories.

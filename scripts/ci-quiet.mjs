@@ -1,13 +1,27 @@
 #!/usr/bin/env node
 
 import { createWriteStream } from 'node:fs';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawn } from 'node:child_process';
 
 const command = process.argv.slice(2);
 const REPORT_LIMIT = 12_000;
+const privateLogDirectory = process.env.CI_PRIVATE_LOG_DIR;
+
+async function preparePrivateLogs() {
+  await mkdir(privateLogDirectory, { recursive: true, mode: 0o700 });
+  const entries = await readdir(privateLogDirectory, { withFileTypes: true });
+  const directories = await Promise.all(entries
+    .filter((entry) => entry.isDirectory() && /^ci-(?:\d+|local)-/.test(entry.name))
+    .map(async (entry) => {
+      const path = join(privateLogDirectory, entry.name);
+      return { path, modified: (await stat(path)).mtimeMs };
+    }));
+  directories.sort((left, right) => right.modified - left.modified);
+  for (const entry of directories.slice(19)) await rm(entry.path, { recursive: true, force: true });
+}
 
 function redact(output) {
   let summary = output;
@@ -52,7 +66,9 @@ if (command[0] !== '--' || command.length < 2) {
   let logPath;
   let status = 1;
   try {
-    directory = await mkdtemp(join(process.env.RUNNER_TEMP || tmpdir(), 'iris-ci-'));
+    if (privateLogDirectory) await preparePrivateLogs();
+    const runId = /^\d+$/.test(process.env.GITHUB_RUN_ID || '') ? process.env.GITHUB_RUN_ID : 'local';
+    directory = await mkdtemp(join(privateLogDirectory || process.env.RUNNER_TEMP || tmpdir(), `ci-${runId}-`));
     logPath = join(directory, 'command.log');
     status = await new Promise((resolve) => {
       const child = spawn(command[1], command.slice(2), { env: process.env, stdio: ['inherit', 'pipe', 'pipe'], windowsHide: true });
@@ -77,7 +93,7 @@ if (command[0] !== '--' || command.length < 2) {
   }
 
   if (status !== 0 && logPath) await reportFailure(logPath, status);
-  if (directory) {
+  if (directory && (status === 0 || !privateLogDirectory)) {
     try { await rm(directory, { recursive: true, force: true }); }
     catch { status = 1; }
   }

@@ -20,4 +20,6 @@ Keep one copy of these deployment files on the host. For each repository, copy `
 
 Jobs select `[self-hosted, linux, x64, ci]`. Only trusted jobs may use the pool; a personal GitHub account requires a separate registration for each repository. IRIS uses its existing single verification job and clears its source workspace before and after execution.
 
+IRIS command output remains outside public Actions logs. Private output is written under `/home/runner/ci-logs` with owner-only directory/file permissions; successful logs are removed and the latest 20 failed or interrupted command directories are retained for diagnosis.
+
 Use `docker compose --env-file instances/<repository>.env logs --tail 50 runner` for status and the same command with `stop` to stop accepting jobs. Container configuration and caches persist in its repository home; deleting that home requires registration again. The named volume contains only that repository's directory from the shared CI filesystem.
