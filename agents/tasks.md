@@ -20,3 +20,5 @@
 | 013 | [BugFix] source-sha-release-gate | 统一构建源码 SHA，待发布 shell 时正常跳过构建 | 重复源码变量和预期等待状态造成失败 | ✅ 已完成 |
 
 | 014 | [CI] IONOS runner pool | 在现有 IONOS 主机部署通用自托管资源池并接入现有测试 CI | 用户要求较大空间和 swap，后续供多个仓库使用 | ✅ 已完成（IRIS-Build 完整 CI 通过；其他仓库后续接入） |
+
+| 015 | [CI] Self-hosted core builds | 将 core 主构建及 Linux x64 原生产物接入通用资源池 | 用户要求 core build 使用自托管 runner | 🔄 进行中 |

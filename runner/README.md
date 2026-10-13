@@ -16,9 +16,9 @@ systemctl daemon-reload
 systemctl enable --now ci.slice
 ```
 
-Keep one copy of these deployment files on the host. For each repository, copy `.env.example` to `instances/<repository>.env`. Set a unique `RUNNER_NAME` and its `RUNNER_REPOSITORY`, create `/srv/ci-runners/$RUNNER_NAME` owned by UID 1001/GID 123 with mode 750, and run `docker compose --env-file instances/<repository>.env build`. Pipe its short-lived repository registration token to `bash register.sh instances/<repository>.env`; it is read from standard input and is never stored in the deployment files.
+Keep one copy of these deployment files on the host. For each repository, copy `.env.example` to `instances/<repository>.env`. Set a unique `RUNNER_NAME` and its `RUNNER_REPOSITORY`, create `/srv/ci-runners/$RUNNER_NAME` owned by UID/GID 1001 with mode 750, and run `docker compose --env-file instances/<repository>.env build`. Pipe its short-lived repository registration token to `bash register.sh instances/<repository>.env`; it is read from standard input and is never stored in the deployment files.
 
-Jobs select `[self-hosted, linux, x64, ci]`. Only trusted jobs may use the pool; a personal GitHub account requires a separate registration for each repository. IRIS uses its existing single verification job and clears its source workspace before and after execution.
+Jobs select `[self-hosted, linux, x64, ci]`. Only trusted jobs may use the pool; a personal GitHub account requires a separate registration for each repository. IRIS uses its single verification job, core build, and Linux x64 notification-reader build. These jobs clear their source workspace before and after execution. Other native targets use their matching hosted runners.
 
 IRIS command output remains outside public Actions logs. Private output is written under `/home/runner/ci-logs` with owner-only directory/file permissions; successful logs are removed and the latest 20 failed or interrupted command directories are retained for diagnosis.
 

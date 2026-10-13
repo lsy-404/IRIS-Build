@@ -69,10 +69,12 @@ jobs:
       actions: read
       contents: write
     if: needs.release-gate.outputs.build == 'true' && ((github.event_name == 'repository_dispatch' && github.event.action == 'iris-build' && github.event.client_payload.build_kind == 'core') || (github.event_name == 'workflow_dispatch' && inputs.kind == 'core'))
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, ci]
     outputs:
       core_version: ${{ steps.number.outputs.core_version }}
     steps:
+      - name: Clean workspace
+        run: find "$GITHUB_WORKSPACE" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
       - name: Checkout build repository
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
@@ -107,9 +109,12 @@ jobs:
           done
       - name: Install pnpm
         run: |
+          export NPM_CONFIG_PREFIX="$RUNNER_TEMP/npm-global"
+          export PATH="$NPM_CONFIG_PREFIX/bin:$PATH"
           npm install --global --force corepack@0.34.1
           corepack enable pnpm
           corepack prepare pnpm@10.34.6 --activate
+          printf '%s\n' "$NPM_CONFIG_PREFIX/bin" >> "$GITHUB_PATH"
       - name: Install dependencies
         env:
           IRIS_RELEASE_UPLOAD_TOKEN: ${{ secrets.IRIS_RELEASE_UPLOAD_TOKEN }}
@@ -178,7 +183,7 @@ jobs:
         if: steps.gate.outputs.shell_build != 'true'
         env:
           WORKFLOW_REPORT_TOKEN: ${{ secrets.IRIS_RELEASE_UPLOAD_TOKEN }}
-        run: node .github/scripts/run-quiet.mjs -- xvfb-run -a pnpm run test:release-behavior
+        run: node .github/scripts/run-quiet.mjs -- xvfb-run -a pnpm run test:release-behavior --concurrency=1
       - name: Generate core release key
         if: steps.gate.outputs.shell_build != 'true'
         env:
@@ -241,7 +246,9 @@ jobs:
           test "$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/latest" --jq '[.assets[] | select(.state != "uploaded")] | length')" = 0
       - name: Wipe secrets and source
         if: always()
-        run: rm -rf "$RUNNER_TEMP/iris-release-key" "$RUNNER_TEMP/iris-release-envelope" iris-source tag-source release-assets build
+        run: |
+          find "$GITHUB_WORKSPACE" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
+          rm -rf -- "$RUNNER_TEMP/npm-global" "$RUNNER_TEMP/iris-release-key" "$RUNNER_TEMP/iris-release-envelope" "$RUNNER_TEMP/shell-gate-verdict" "$RUNNER_TEMP/shell-manifest.json"
 
   shell-check:
     timeout-minutes: 30
@@ -595,7 +602,7 @@ jobs:
             runner: windows-latest
             target: ''
           - platform: linux-x64
-            runner: ubuntu-24.04
+            runner: [self-hosted, linux, x64, ci]
             target: x86_64-unknown-linux-musl
           - platform: linux-arm64
             runner: ubuntu-24.04-arm
@@ -607,6 +614,10 @@ jobs:
         working-directory: iris-source
         shell: bash
     steps:
+      - name: Clean self-hosted workspace
+        if: runner.environment == 'self-hosted'
+        working-directory: .
+        run: find "$GITHUB_WORKSPACE" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
       - name: Checkout trusted build tools
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
@@ -631,14 +642,14 @@ jobs:
           package-manager-cache: false
       - name: Setup Rust
         if: runner.os != 'macOS'
-        run: |
-          rustup toolchain install stable --profile minimal
-          rustup default stable
+        uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249
+        with:
+          toolchain: stable
       - name: Install Linux Rust target
         if: runner.os == 'Linux'
         run: rustup target add '${{ matrix.target }}' --toolchain stable
       - name: Install static Linux C linker
-        if: runner.os == 'Linux'
+        if: runner.os == 'Linux' && runner.environment != 'self-hosted'
         run: sudo apt-get update && sudo apt-get install -y musl-tools
       - name: Verify the native protocol
         if: runner.os != 'macOS'
@@ -653,3 +664,7 @@ jobs:
           path: iris-source/build/native/notification-reader
           include-hidden-files: true
           retention-days: 1
+      - name: Wipe self-hosted source
+        if: always() && runner.environment == 'self-hosted'
+        working-directory: .
+        run: find "$GITHUB_WORKSPACE" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
