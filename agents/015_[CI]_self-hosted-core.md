@@ -55,9 +55,19 @@
 - A job annotations request returned 404 because annotations belong to its check run -> resolved the job's check_run_url for the correct read. No account billing settings were changed.
 - Complete core run 38478472026 was dispatched at 22:32:24 UTC from a849e6e with source 784cd98de. It failed at startup with zero jobs. REST exposed no check runs -> inspected its public Actions summary -> GitHub rejected dtolnay/rust-toolchain under the repository's selected-actions policy (only owned/GitHub/actions/* repositories are allowed).
 - Replaced the disallowed action with the official rustup bootstrap and the existing stable toolchain commands. Repository security policy stays intact; no additional workflows or test cases are introduced.
+- actionlint and diff validation passed; committed and pushed 900f50d after a fresh fetch and protection/ruleset check.
+- Unexpired shell-release-context artifact 11780521775 belongs to successful shell build 38323567839 and expires on October 16. The existing release gate deliberately blocks newer builds until that shell publishes; recent run 38469622008 is success with core skipped and therefore is not acceptance.
+- No IRIS_SHELL_PUBLISH_HOLD variable is set. The previous shell publisher 38326199630 failed signing-readiness, so begin a fresh normal publisher dispatch for the required pending build, preserving its provenance and publication checks rather than bypassing the gate.
+- Fresh shell publisher 38479360595 ran its hosted resolve/readiness jobs successfully but failed the signing check with SIGNING_FAILED arm64 execution_did_not_complete; macOS verification and publication were skipped.
+- Retried full core workflow 38479632657 at 900f50d with source 784cd98de. Its release-gate passed, but core job 115578818428 and native jobs were skipped because of the pending shell. The overall success status does not mean core executed; runner_id is null for core.
+- Correlated ARM64 signing request 45f3ca38-1a86-4839-ae0d-a18e6e13014e to signing-exec-public run 38325978085. Its Execute signing request step failed with disk image operation failed: stapling. The corresponding x64 request's final public execution 38326065902 succeeded. Neither signature diagnosis depended on the supplied private model-data billing failure.
+- Inspected the signing coordinator without modifying it: the failed finalization is terminal and the existing automatic retry path only covers unclaimed dmg_sign execution. No normal replay/resume action was found for this failed finalization; did not weaken signing verification or alter its state.
+- Preserved all eight unexpired GitHub artifacts for shell build 38323567839 in /srv/ci-runners/.archives/IRIS-Build/38323567839 on #5, with root-only access. Every archive matches its GitHub SHA-256 digest and passes ZIP CRC validation; manifest.json records the original identifiers and names. No original artifact has been deleted.
+- Requested the user's choice between cancelling the obsolete 0.5.89 candidate and rebuilding latest main, or retaining it and repairing signing first. Candidate cancellation is pending explicit approval; full core workflow acceptance remains open.
 
 ## Result
 
 - Core and Linux x64 notification-reader jobs now select the common self-hosted pool. Windows, macOS, and Linux ARM64 native jobs retain their matching hosted machines.
 - Exact-source core compilation, renderer compilation, native protocol/build/digest checks, and existing release static/behavior checks all pass on IONOS #5 within the unchanged aggregate resource budget.
 - The active runner uses the updated image, is online, and accepts jobs. Future production core workflows retain the existing release gates and publication steps.
+- Live workflow acceptance is currently blocked by the failed old shell candidate. Full core run 38479632657 has core skipped, so actual GitHub core execution on #5 is not yet confirmed.
