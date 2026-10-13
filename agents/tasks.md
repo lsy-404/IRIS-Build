@@ -18,3 +18,5 @@
 | 012 | [CI] 测试轻量化 | IRIS CI 仅保留 ubuntu-24.04 单作业，去掉多平台、构建、性能作业与定时任务 | Rosmontis 要求测试严格控制在轻量化 Ubuntu 以减少 usage | ✅ 已完成 |
 
 | 013 | [BugFix] source-sha-release-gate | 统一构建源码 SHA，待发布 shell 时正常跳过构建 | 重复源码变量和预期等待状态造成失败 | ✅ 已完成 |
+
+| 014 | [CI] IONOS test runner | 在现有 IONOS 主机接入隔离的自托管测试 runner | 用户要求现有 CI 测试使用自有服务器 | 🔄 进行中 |

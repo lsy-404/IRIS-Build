@@ -1,0 +1,28 @@
+name: iris-ci
+
+services:
+  runner:
+    build: .
+    image: iris-ci-runner:2.338.0
+    container_name: iris-ci-runner
+    command: ["./run.sh"]
+    init: true
+    restart: unless-stopped
+    cpus: 2
+    cpu_shares: 256
+    mem_limit: 4g
+    memswap_limit: 4g
+    pids_limit: 512
+    shm_size: 512m
+    oom_score_adj: 500
+    volumes:
+      - runner-home:/home/runner
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+
+volumes:
+  runner-home:
+    name: iris-ci-runner-home
