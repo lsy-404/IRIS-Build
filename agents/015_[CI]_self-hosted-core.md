@@ -17,8 +17,8 @@
 - [x] Execute existing core build checks and Linux native compilation against an exact source commit in the isolated container.
 - [x] Fetch again, inspect branch protection/rulesets, integrate the focused changes, and push.
 - [x] Dispatch the complete core workflow using current IRIS main and current IRIS-Build main.
-- [ ] Resolve any workflow blocker within the authorized release path and confirm the core job actually runs on IONOS #5.
-- [ ] Verify all required jobs and publication steps pass, inspect final cleanup, and record the live run.
+- [x] Resolve any workflow blocker within the authorized release path and confirm the core job actually runs on IONOS #5.
+- [x] Verify all required jobs and publication steps pass, inspect final cleanup, and record the live run.
 
 ## Findings
 
@@ -69,10 +69,19 @@
 - Published fixed executor tag runner-token-2026-10-14-1 and deployed focused Worker b591d6c8-ad76-4683-bcae-f2672f080b35 using the already-approved production policy; organization/tag signing remains outside the deployment.
 - Rechecked all eight root-only archives and their manifest on #5. Removed only the obsolete GitHub shell-release-context artifact 11780521775; its 912-byte archive remains preserved with the other seven archives. No other GitHub artifact was deleted; the current listing retains the two installer artifacts while shorter-lived artifacts have already expired. This retires the irrecoverable candidate through the existing release gate rather than bypassing that gate.
 - Current IRIS main is 1b7ad06967437653c47111755672def1041dcab0. Dispatched a new complete core workflow for that exact source on Build main 149af15; live acceptance is in progress.
+- Core run 38511260374 passed all four native jobs, with Linux x64 job 115680103717 on runner ID 21. Core job 115680651439 also actually executed on ionos5-iris-ci and passed setup, source checkout, dependency install, metadata and compatibility gating. The normal compatibility gate requested a new shell and skipped core compilation/publication, so this run still does not satisfy full core acceptance.
+- The compatibility gate automatically dispatched shell build 38511486170 for the same exact source. Continue that build, fixed signing execution and normal publication, then dispatch full core again.
+- Shell build 38511486170 passed all required jobs and produced shell 0.5.89. Both initial signing jobs on fixed recipe 57f7f8b passed. ARM64 app finalization encountered Gatekeeper verification failure in run 38513747235; the center retained its input, queued a fresh generation, and run 38513954277 passed. x64 app finalization also passed.
+- Both DMG signing and notarization stages passed. Final DMG runs 38514425003 and 38514427533 passed staple, Gatekeeper, signature/report verification and cleanup. The signing center automatically handed off to shell publisher 38514627533.
+- IRIS main advanced during signing to a994f82f4e49c09d3d9b6b3f442cad6ed02b75f3 (core-only storage changes). Its single self-hosted CI run 38512321882 passed; final core acceptance will use latest main after shell publication.
+- Shell publisher 38514627533 completed successfully: readiness, independent macOS verification, license service publication, shell/core source tags, GitHub Release mirror and transient artifact cleanup all passed. The pending release gate is now clear; dispatch final full core against a fresh latest-main lookup.
+- Final full core run 38515202518 completed successfully on Build main 4e49c27876514c8e5bc16bb4e957f99265ba457c, attempt 1, with latest IRIS main a994f82f4e49c09d3d9b6b3f442cad6ed02b75f3. Release gate and all four native jobs passed. Linux x64 job 115692386415 and core job 115692944221 ran on ionos5-iris-ci, runner ID 21.
+- Core job ran from 05:12:35 to 05:19:16 UTC. All steps passed, including shell compatibility, version reservation, typecheck/main compilation, static contracts, behavior gate, key creation, native artifact verification, payload packing, license publication, source tag, GitHub Release and secret/source cleanup. No core build or publication step was skipped. Published Core 26.1014.1.
+- Final host inspection confirms online/idle runner, 2 CPU quota, 4 GiB RAM, 12 GiB swap budget and about 95 GiB available in the 100 GiB reserved pool. No failure logs remain, no container OOM occurred, and existing production services and containers remain active.
 
 ## Result
 
 - Core and Linux x64 notification-reader jobs now select the common self-hosted pool. Windows, macOS, and Linux ARM64 native jobs retain their matching hosted machines.
 - Exact-source core compilation, renderer compilation, native protocol/build/digest checks, and existing release static/behavior checks all pass on IONOS #5 within the unchanged aggregate resource budget.
 - The active runner uses the updated image, is online, and accepts jobs. Future production core workflows retain the existing release gates and publication steps.
-- Live workflow acceptance is currently blocked by the failed old shell candidate. Full core run 38479632657 has core skipped, so actual GitHub core execution on #5 is not yet confirmed.
+- Complete latest-main core workflow acceptance passed in run 38515202518. Core job 115692944221 executed all compilation, check, packing and publication steps successfully on IONOS #5. Shell 0.5.89 also completed its fixed dual-architecture macOS signing and normal publication path.
