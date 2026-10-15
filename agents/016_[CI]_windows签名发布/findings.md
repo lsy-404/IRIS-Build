@@ -13,3 +13,5 @@
 - 主任务审阅发现 finalize 的 Hash.digest 重复调用会抛出 ERR_CRYPTO_HASH_FINALIZED，已改为一次取出字节并编码为 hex/base64；证书 DN 比较按属性归一化，保留完整主体校验。
 
 - 昨日未发布 0.5.90 的 publisher 在 dmg-staple 阶段退出。为已有原生票据校验加入三次有限重试，全部失败仍拒绝发布；签名、Team、Gatekeeper 和装订要求不变。旧上下文保存后由本轮完整签名 0.6.0 取代。
+
+- 核对实际锁文件发现 electron-builder 26.15.3 已使用纯 JS buildBlockMap，未再依赖旧 app-builder-bin；取消尚未进入签名的首个源运行 38788299721。改为使用源仓已有 esbuild 将锁定 SDK 的 blockmap 模块及哈希依赖打成独立 CJS，再在原生验签作业中生成最终 blockmap；不复制、重写分块算法。

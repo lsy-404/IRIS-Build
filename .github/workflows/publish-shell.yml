@@ -252,7 +252,7 @@ jobs:
         env:
           INPUT_SIGNED_WINDOWS_DIR: ${{ runner.temp }}/signed-windows
           INPUT_VERSION: ${{ needs.resolve.outputs.shell_version }}
-          INPUT_APP_BUILDER: ${{ runner.temp }}/blockmap-tool/app-builder.exe
+          INPUT_BLOCKMAP_MODULE: ${{ runner.temp }}/blockmap-tool/blockmap.cjs
         shell: pwsh
         run: node .release-tools/scripts/finalize-windows.mjs
       - name: Verify Authenticode, timestamp, and publisher identity

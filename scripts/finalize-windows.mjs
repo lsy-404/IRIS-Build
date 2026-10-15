@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
 import { appendFile, lstat, readFile, readdir, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
+import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 
 class FinalizeError extends Error { constructor(code) { super(code); this.code = code; } }
@@ -17,16 +17,11 @@ async function fileHash(file, algorithm) {
   return { size, hex: bytes.toString('hex'), base64: bytes.toString('base64') };
 }
 
-function run(file, args) {
-  const result = spawnSync(file, args, { encoding: 'utf8', stdio: ['ignore', 'ignore', 'ignore'], timeout: 120_000 });
-  if (result.error || result.status !== 0) throw new FinalizeError('BLOCKMAP_FAILED');
-}
-
-export async function finalizeWindows({ env = process.env, exec = run, now = Date.now } = {}) {
+export async function finalizeWindows({ env = process.env, now = Date.now } = {}) {
   const dir = env.INPUT_SIGNED_WINDOWS_DIR;
   const version = env.INPUT_VERSION;
-  const appBuilder = env.INPUT_APP_BUILDER;
-  if (!dir || !path.isAbsolute(dir) || !VERSION.test(version ?? '') || !appBuilder || !path.isAbsolute(appBuilder)) throw new FinalizeError('INVALID_INPUT');
+  const blockmapModule = env.INPUT_BLOCKMAP_MODULE;
+  if (!dir || !path.isAbsolute(dir) || !VERSION.test(version ?? '') || !blockmapModule || !path.isAbsolute(blockmapModule)) throw new FinalizeError('INVALID_INPUT');
   const installerName = `IRIS-${version}-win-x64.exe`;
   const portableName = `IRIS-${version}-win-x64-portable.exe`;
   const installer = path.join(dir, installerName);
@@ -44,7 +39,9 @@ export async function finalizeWindows({ env = process.env, exec = run, now = Dat
   } catch { throw new FinalizeError('SIGNED_SET_INVALID'); }
   if (manifest.version !== version || report.request_id !== manifest.request_id || report.input_digest !== manifest.input_digest
     || report.nested_signatures_verified !== true || report.stage !== 'windows_sign') throw new FinalizeError('SIGNED_SET_INVALID');
-  exec(appBuilder, ['blockmap', '--input', installer, '--output', blockmap]);
+  const { buildBlockMap } = createRequire(import.meta.url)(blockmapModule);
+  if (typeof buildBlockMap !== 'function') throw new FinalizeError('BLOCKMAP_UNAVAILABLE');
+  await buildBlockMap(installer,'gzip',blockmap);
   const mapInfo = await stat(blockmap).catch(() => null);
   if (!mapInfo?.isFile() || mapInfo.size < 1) throw new FinalizeError('BLOCKMAP_FAILED');
   const files = [];

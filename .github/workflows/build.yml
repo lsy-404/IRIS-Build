@@ -547,17 +547,12 @@ jobs:
         shell: bash
         run: node .release-tools/scripts/submit-windows.mjs submit
       - name: Stage electron-builder blockmap tool
-        shell: pwsh
-        run: |
-          $tool = Get-ChildItem node_modules/.pnpm -Directory | Where-Object { $_.Name -like 'app-builder-bin@*' } | ForEach-Object { Join-Path $_.FullName 'node_modules/app-builder-bin/win/x64/app-builder.exe' } | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
-          if (-not $tool) { throw 'app-builder binary is unavailable' }
-          New-Item -ItemType Directory -Path "$env:RUNNER_TEMP/blockmap-tool" | Out-Null
-          Copy-Item -LiteralPath $tool -Destination "$env:RUNNER_TEMP/blockmap-tool/app-builder.exe"
+        run: node .release-tools/scripts/stage-blockmap.mjs
       - name: Retain blockmap tool for signed installer metadata
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: windows-blockmap-tool
-          path: ${{ runner.temp }}/blockmap-tool/app-builder.exe
+          path: ${{ runner.temp }}/blockmap-tool/blockmap.cjs
           if-no-files-found: error
           retention-days: 3
       - name: Wipe Windows source build
