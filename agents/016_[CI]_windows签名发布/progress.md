@@ -1,6 +1,7 @@
 # Progress
 
 - 已从 `origin/main` 的 `253a936` 创建隔离 worktree `codex/windows-signing`。
+- 新源 run 38811075767 的三份签名请求已全部通过；Windows run 38817656982 成功上传输出且完成清理，两个新 Mac 最终 DMG / App 的本机 Get-Sign 均为 PASS，版本 0.6.0。publisher 38818388989 通过 readiness 和 macOS 验证后，在 Windows 下载前因 INVALID_INPUT 停止：共享 signingInputs 合同要求完整三平台上下文，而该 job 漏传四个 Mac 请求字段。补齐已有 resolve 输出到该 job 环境，不改变签名报告校验；后续用同一已签名源新建发布运行，无需重签或重建来源。
 - 已读取全局 Agent Mode 与 IRIS-Build 项目索引、macOS 签名发布设计记录。
 - 已检查现有 build/publish 工作流、提交工具、release context 校验和签名中心 Windows schema。
 

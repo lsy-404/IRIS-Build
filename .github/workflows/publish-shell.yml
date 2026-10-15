@@ -198,6 +198,10 @@ jobs:
           INPUT_BUILD_RUN_ID: ${{ env.BUILD_RUN_ID }}
           INPUT_VERSION: ${{ needs.resolve.outputs.shell_version }}
           INPUT_SOURCE_SHA: ${{ needs.resolve.outputs.source_sha }}
+          INPUT_ARM64_REQUEST_ID: ${{ needs.resolve.outputs.arm64_request_id }}
+          INPUT_ARM64_INPUT_DIGEST: ${{ needs.resolve.outputs.arm64_input_digest }}
+          INPUT_X64_REQUEST_ID: ${{ needs.resolve.outputs.x64_request_id }}
+          INPUT_X64_INPUT_DIGEST: ${{ needs.resolve.outputs.x64_input_digest }}
           INPUT_WINDOWS_REQUEST_ID: ${{ needs.resolve.outputs.windows_request_id }}
           INPUT_WINDOWS_INPUT_DIGEST: ${{ needs.resolve.outputs.windows_input_digest }}
           INPUT_WINDOWS_INPUT_SIZE: ${{ needs.resolve.outputs.windows_input_size }}
