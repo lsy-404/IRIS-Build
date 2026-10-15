@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
-import { chmod, cp, lstat, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { chmod, copyFile, cp, lstat, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -57,6 +57,7 @@ async function prepare(env) {
     await mkdir(stage, { mode: 0o700 });
     const stagedApp = path.join(stage, 'app');
     await cp(app, stagedApp, { recursive: true, errorOnExist: true, force: false });
+    await copyFile(path.join(env.GITHUB_WORKSPACE,'assets','icons','icon.ico'),path.join(stagedApp,'resources','installer.ico'));
     await writeFile(path.join(stage, 'source.json'), `${JSON.stringify({ source_sha: env.INPUT_SOURCE_SHA, version: env.INPUT_VERSION, bundle_id: BUNDLE_ID, architecture: 'x64' })}\n`, { flag: 'wx', mode: 0o600 });
     const archive = path.join(work, 'source.zip');
     runPowerShell({ ...env, IRIS_ARCHIVE_STAGE: stage, IRIS_SOURCE_ARCHIVE: archive });

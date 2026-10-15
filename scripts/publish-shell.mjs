@@ -370,11 +370,18 @@ async function findMountedApp(mounted) {
 
 const DEVELOPER_ID_REQUIREMENT = `anchor apple generic and identifier "${BUNDLE_ID}" and certificate leaf[subject.OU] = "${TEAM_ID}"`;
 
-export async function verifyMacos({ exec = defaultExec, dmg, arch, version, tmpRoot = os.tmpdir() }) {
+async function retryNative(call, sleep) {
+  for (let attempt=1; ; attempt++) {
+    try { return await call(); }
+    catch (error) { if (attempt>=3) throw error; await sleep(2500*attempt); }
+  }
+}
+
+export async function verifyMacos({ exec = defaultExec, dmg, arch, version, tmpRoot = os.tmpdir(), sleep = defaultSleep }) {
   const gatekeeper = 'source=Notarized Developer ID';
   await check('dmg-codesign', () => exec('/usr/bin/codesign', ['--verify', '--strict', '--verbose=2', dmg]));
   requireIdentity(await check('dmg-identity', () => exec('/usr/bin/codesign', ['-dv', '--verbose=4', dmg])), 'dmg-identity');
-  await check('dmg-staple', () => exec('/usr/bin/xcrun', ['stapler', 'validate', dmg]));
+  await check('dmg-staple', () => retryNative(() => exec('/usr/bin/xcrun', ['stapler', 'validate', dmg]), sleep));
   const dmgAssessment = await check('dmg-gatekeeper', () => exec('/usr/sbin/spctl', ['--assess', '--type', 'open', '--context', 'context:primary-signature', '--verbose=2', dmg]));
   if (!dmgAssessment.includes(gatekeeper)) failCheck('dmg-gatekeeper');
 
@@ -402,7 +409,7 @@ export async function verifyMacos({ exec = defaultExec, dmg, arch, version, tmpR
     const archs = await check('app-metadata', () => exec('/usr/bin/lipo', ['-archs', path.join(app, 'Contents', 'MacOS', 'IRIS')]));
     if (archs.trim() !== LIPO_ARCH[arch]) failCheck('app-metadata');
 
-    await check('app-notarization', () => exec('/usr/bin/xcrun', ['stapler', 'validate', app]));
+    await check('app-notarization', () => retryNative(() => exec('/usr/bin/xcrun', ['stapler', 'validate', app]), sleep));
     const appAssessment = await check('app-notarization', () => exec('/usr/sbin/spctl', ['--assess', '--type', 'execute', '--verbose=2', app]));
     if (!appAssessment.includes(gatekeeper)) failCheck('app-notarization');
 

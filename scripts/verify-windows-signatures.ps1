@@ -5,6 +5,9 @@ $version = $env:IRIS_INPUT_VERSION
 $requestId = $env:IRIS_INPUT_WINDOWS_REQUEST_ID
 $inputDigest = $env:IRIS_INPUT_WINDOWS_INPUT_DIGEST
 $expectedSubject = 'CN=VOIDCARVE LABS, O=VOIDCARVE LABS, L=Mississauga, S=Ontario, C=CA'
+function Normalize-Subject([string]$value) {
+  return (($value -split ',\s*' | ForEach-Object { $_.Trim() -replace '^ST\s*=', 'S=' } | Sort-Object) -join ',')
+}
 
 if (-not [System.IO.Path]::IsPathFullyQualified($dir) -or $version -notmatch '^\d+\.\d+\.\d+$' -or $requestId -notmatch '^[0-9a-f-]{36}$' -or $inputDigest -notmatch '^sha256:[a-f0-9]{64}$') {
   throw 'INVALID_INPUT'
@@ -48,7 +51,7 @@ if (-not $signtool) { throw 'SIGNTOOL_UNAVAILABLE' }
 foreach ($name in @($installerName, $portableName)) {
   $path = Join-Path $dir $name
   $signature = Get-AuthenticodeSignature -LiteralPath $path
-  if ($signature.Status -ne [System.Management.Automation.SignatureStatus]::Valid -or $signature.SignerCertificate.Subject -cne $expectedSubject -or $null -eq $signature.TimeStamperCertificate) {
+  if ($signature.Status -ne [System.Management.Automation.SignatureStatus]::Valid -or (Normalize-Subject $signature.SignerCertificate.Subject) -ine (Normalize-Subject $expectedSubject) -or $null -eq $signature.TimeStamperCertificate) {
     throw 'WINDOWS_SIGNATURE_INVALID'
   }
   & $signtool verify /pa /all /tw $path *> $null

@@ -13,7 +13,8 @@ async function fileHash(file, algorithm) {
   const digest = createHash(algorithm);
   let size = 0;
   for await (const chunk of createReadStream(file)) { digest.update(chunk); size += chunk.length; }
-  return { size, hex: digest.digest('hex'), base64: digest.digest('base64') };
+  const bytes = digest.digest();
+  return { size, hex: bytes.toString('hex'), base64: bytes.toString('base64') };
 }
 
 function run(file, args) {

@@ -8,3 +8,6 @@
 - 密封发布上下文现在严格绑定三份签名请求；发布 pipeline 加入 Windows status/download/report 校验、Windows 原生 Authenticode/timestamp/subject 校验，以及签名后 installer SHA-512、latest.yml 和 blockmap 生成。
 - 更新两个既有发布 fixture 与静态 workflow 检查，没有增加测试用例。`node --test test/submit-macos.test.mjs test/publish-shell.test.mjs` 通过 76/76；`actionlint`、两个既有 workflow shell checks、Node 语法检查与 `git diff --check` 通过。
 - 已提交聚焦实现，提交信息为 `Add Windows signing handoff to shell release`。
+
+- 主任务修复最终摘要重复 finalize、完整证书 DN 归一化及原生票据校验有限重试；既有 76 条 Node 发布案例再次通过。
+- Windows 未打包应用携带原 installer ICO 供固定签名配方使用。
