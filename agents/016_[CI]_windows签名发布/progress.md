@@ -18,3 +18,5 @@
 - 使用同一已审核源 b9e3cd327c93976deb97586616545909a09093d8 和版本 0.6.0 重新提交源 run 38811075767，供修复后的固定 Windows 签名配方验收。真实新发布及更新元数据仍待完成。
 
 - Publisher 38818783792 的全部签名下载与原生验证通过，签名后 Windows blockmap / latest.yml 生成通过；发布步骤在 quiet 子命令失败。增加固定阶段提示用于区分解密、payload 上传及安装器发布，不记录任何参数或凭据；正在核对服务端实际提交状态，尚未报告发布完成。
+
+- Publisher 38819814636 completed successfully. Production serves this exact candidate: shell 0.6.0, core 26.1015.3, compatibility 0.6. GitHub latest contains both signed DMGs, signed NSIS installer and portable executable, regenerated blockmap and update metadata. Downloaded all three production platform objects and matched SHA-256 against GitHub; their SHA-512 and sizes match latest-mac.yml / latest.yml, and blockmap digest matches. Local Get-Sign rechecked production arm64 and x64 DMGs and enclosed 0.6.0 apps: PASS, DefaultPassed / Distribution Passed / VerifiedStapled. Windows native publisher verification passed the complete subject, Authenticode and timestamp checks. Browser confirmed Downloads shows IRIS 0.6.0; stale unsigned-macOS guidance is being corrected separately in the source portal.
