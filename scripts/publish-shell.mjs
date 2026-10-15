@@ -12,6 +12,8 @@ const SIGN_ENDPOINT = 'https://sign.voidcarve.com/v1/requests';
 const TEAM_ID = '76DMUAK6J5';
 const BUNDLE_ID = 'io.github.wuyilingwei.iris';
 const APP = 'IRIS.app';
+const WINDOWS_PROJECT = 'iris-shell-windows-x64';
+const WINDOWS_SUBJECT = 'CN=VOIDCARVE LABS, O=VOIDCARVE LABS, L=Mississauga, S=Ontario, C=CA';
 const BUILD_WORKFLOW = '.github/workflows/build.yml';
 const CONTEXT_ARTIFACT = 'shell-release-context';
 const SIGNED_ARTIFACT = 'signed-macos';
@@ -178,6 +180,9 @@ export function contextOutputs(context, { pub = false, sealKey } = {}) {
     arm64_input_digest: context.macos.arm64.input_digest,
     x64_request_id: context.macos.x64.request_id,
     x64_input_digest: context.macos.x64.input_digest,
+    windows_request_id: context.windows.request_id,
+    windows_input_digest: context.windows.input_digest,
+    windows_input_size: context.windows.input_size,
   };
   if (pub) return outputs;
   for (const key of ['internal_version', 'core_build', 'core_version', 'shell_fingerprint', 'release_id']) outputs[key] = context[key];
@@ -202,11 +207,17 @@ function signingInputs(env) {
     requests[arch] = { id, digest };
   }
   if (requests.arm64.id === requests.x64.id) throw new PublishError('INVALID_INPUT');
-  return { buildRunId, version, sourceSha, apiKey, requests };
+  const windowsId = env.INPUT_WINDOWS_REQUEST_ID;
+  const windowsDigest = env.INPUT_WINDOWS_INPUT_DIGEST;
+  const windowsSize = Number(env.INPUT_WINDOWS_INPUT_SIZE);
+  if (!UUID.test(windowsId ?? '') || !ARCHIVE_DIGEST.test(windowsDigest ?? '')
+    || !Number.isSafeInteger(windowsSize) || windowsSize < 1 || Object.values(requests).some((entry) => entry.id === windowsId)) throw new PublishError('INVALID_INPUT');
+  return { buildRunId, version, sourceSha, apiKey, requests, windows: { id: windowsId, digest: windowsDigest, size: windowsSize } };
 }
 
 async function signingStatus({ fetchImpl }, inputs, arch) {
-  const { id, digest } = inputs.requests[arch];
+  const windows = arch === 'windows';
+  const { id, digest } = windows ? inputs.windows : inputs.requests[arch];
   let response;
   try {
     response = await fetchImpl(`${SIGN_ENDPOINT}/${id}`, {
@@ -223,7 +234,7 @@ async function signingStatus({ fetchImpl }, inputs, arch) {
   }
   let body;
   try { body = await readJsonBody(response); } catch { throw new PublishError('SIGNING_STATUS_UNAVAILABLE', { transient: true }); }
-  if (body?.request_id !== id || body.project_id !== PROJECT(arch) || body.platform !== 'macos'
+  if (body?.request_id !== id || body.project_id !== (windows ? WINDOWS_PROJECT : PROJECT(arch)) || body.platform !== (windows ? 'windows' : 'macos')
     || body.source_run_id !== Number(inputs.buildRunId) || body.version !== inputs.version
     || body.source_sha !== inputs.sourceSha || body.input_digest !== digest) throw new PublishError('SIGNING_REQUEST_MISMATCH');
   return body;
@@ -247,6 +258,9 @@ export async function checkSigning({ env = process.env, fetchImpl = fetch, sleep
     if (!interpretStatus(body, arch)) ready = false;
     log(`${arch}: ${SAFE_CODE.test(body.state ?? '') ? body.state : 'unknown'}`);
   }
+  const windows = await retryStatus({ fetchImpl, sleep }, inputs, 'windows');
+  if (!interpretStatus(windows, 'windows')) ready = false;
+  log(`windows: ${SAFE_CODE.test(windows.state ?? '') ? windows.state : 'unknown'}`);
   return ready;
 }
 
@@ -282,8 +296,8 @@ async function hashFile(file, algorithm) {
   return { hash, size };
 }
 
-async function downloadArchive({ fetchImpl, sleep }, inputs, arch, expected, dest) {
-  const url = `${SIGN_ENDPOINT}/${inputs.requests[arch].id}/download`;
+async function downloadArchive({ fetchImpl, sleep }, inputs, requestId, expected, dest) {
+  const url = `${SIGN_ENDPOINT}/${requestId}/download`;
   await writeFile(dest, '', { mode: 0o600 });
   for (let attempt = 1; ; attempt += 1) {
     const have = (await stat(dest)).size;
@@ -446,7 +460,7 @@ export async function fetchSigned({ env = process.env, fetchImpl = fetch, sleep 
     const expected = interpretStatus(body, arch);
     if (!expected) throw new PublishError('SIGNED_OUTPUT_UNAVAILABLE');
     const zip = path.join(work, `${arch}.zip`);
-    await downloadArchive(deps, inputs, arch, expected, zip);
+    await downloadArchive(deps, inputs, inputs.requests[arch].id, expected, zip);
     const entries = listEntries(exec('/usr/bin/unzip', ['-Z1', zip]));
     if (entries.join() !== 'product.dmg,verification.json') throw new PublishError('SIGNED_ARCHIVE_INVALID');
     const unpacked = path.join(work, arch);
@@ -475,14 +489,85 @@ export async function fetchSigned({ env = process.env, fetchImpl = fetch, sleep 
   return out;
 }
 
+const WINDOWS_REPORT_KEYS = ['schema_version', 'request_id', 'generation', 'stage', 'input_digest', 'recipe_sha', 'policy_digest', 'bundle_id', 'version', 'architecture', 'subject',
+  'authenticode_verified', 'timestamp_verified', 'nested_signatures_verified', 'files'];
+
+export function validateWindowsVerification(report, { requestId, inputDigest, version, products }) {
+  const paths = ['product.exe', 'product-portable.exe'];
+  const files = Array.isArray(report?.files) ? report.files : [];
+  const reportValid = report !== null && typeof report === 'object' && !Array.isArray(report)
+    && Object.keys(report).length === WINDOWS_REPORT_KEYS.length && WINDOWS_REPORT_KEYS.every((key) => Object.hasOwn(report, key))
+    && report.schema_version === 1 && report.request_id === requestId && report.stage === 'windows_sign'
+    && report.input_digest === inputDigest && SHA.test(report.recipe_sha ?? '') && ARCHIVE_DIGEST.test(report.policy_digest ?? '')
+    && report.bundle_id === BUNDLE_ID && report.version === version && report.architecture === 'x64' && report.subject === WINDOWS_SUBJECT
+    && report.authenticode_verified === true && report.timestamp_verified === true && report.nested_signatures_verified === true
+    && Number.isSafeInteger(report.generation) && report.generation > 0
+    && files.length === paths.length && files.every((file) => file && Object.keys(file).sort().join() === 'path,sha256,size'
+      && paths.includes(file.path) && Number.isSafeInteger(file.size) && file.size > 0 && /^[a-f0-9]{64}$/.test(file.sha256 ?? ''))
+    && new Set(files.map((file) => file.path)).size === paths.length;
+  if (!reportValid) throw new PublishError('VERIFICATION_REPORT_INVALID');
+  for (const name of paths) {
+    const item = files.find((file) => file.path === name);
+    const actual = products[name];
+    if (!actual || item.size !== actual.size || item.sha256 !== actual.sha256) throw new PublishError('VERIFICATION_REPORT_INVALID');
+  }
+  return report;
+}
+
+export async function fetchWindowsSigned({ env = process.env, fetchImpl = fetch, sleep = defaultSleep, exec = defaultExec } = {}) {
+  const inputs = signingInputs(env);
+  const outputBody = await retryStatus({ fetchImpl, sleep }, inputs, 'windows');
+  const expected = interpretStatus(outputBody, 'windows');
+  if (!expected) throw new PublishError('SIGNED_OUTPUT_UNAVAILABLE');
+  const runId = requireRunId(env.GITHUB_RUN_ID);
+  if (!env.RUNNER_TEMP || !path.isAbsolute(env.RUNNER_TEMP)) throw new PublishError('TEMP_UNAVAILABLE');
+  const work = path.join(env.RUNNER_TEMP, `iris-windows-signed-${runId}`);
+  const out = path.join(env.RUNNER_TEMP, 'signed-windows');
+  await mkdir(work, { mode: 0o700 });
+  await mkdir(out, { mode: 0o700 });
+  const archive = path.join(work, 'windows.zip');
+  await downloadArchive({ fetchImpl, sleep }, inputs, inputs.windows.id, expected, archive);
+  const names = listEntries(exec('/usr/bin/unzip', ['-Z1', archive]));
+  const expectedNames = ['product.exe', 'product-portable.exe', 'verification.json'].sort();
+  if (names.length !== expectedNames.length || names.some((name, index) => name !== expectedNames[index])) throw new PublishError('SIGNED_ARCHIVE_INVALID');
+  const unpacked = path.join(work, 'unpacked');
+  await mkdir(unpacked, { mode: 0o700 });
+  exec('/usr/bin/unzip', ['-o', '-q', '-d', unpacked, archive]);
+  const products = {};
+  for (const name of ['product.exe', 'product-portable.exe']) {
+    const file = path.join(unpacked, name);
+    const info = await lstat(file).catch(() => null);
+    if (!info?.isFile()) throw new PublishError('SIGNED_ARCHIVE_INVALID');
+    const { hash, size } = await hashFile(file, 'sha256');
+    products[name] = { size, sha256: hash.digest('hex') };
+  }
+  const reportFile = path.join(unpacked, 'verification.json');
+  const reportInfo = await lstat(reportFile).catch(() => null);
+  if (!reportInfo?.isFile() || reportInfo.size > 65536) throw new PublishError('SIGNED_ARCHIVE_INVALID');
+  let report;
+  try { report = JSON.parse(await readFile(reportFile, 'utf8')); } catch { throw new PublishError('VERIFICATION_REPORT_INVALID'); }
+  validateWindowsVerification(report, { requestId: inputs.windows.id, inputDigest: inputs.windows.digest, version: inputs.version, products });
+  const files = [
+    { name: `IRIS-${inputs.version}-win-x64.exe`, ...products['product.exe'] },
+    { name: `IRIS-${inputs.version}-win-x64-portable.exe`, ...products['product-portable.exe'] },
+  ];
+  for (const [index, original] of ['product.exe', 'product-portable.exe'].entries()) await copyFile(path.join(unpacked, original), path.join(out, files[index].name));
+  await copyFile(reportFile, path.join(out, 'verification.json'));
+  await writeFile(path.join(out, 'windows-signed.json'), `${JSON.stringify({ version: inputs.version, request_id: inputs.windows.id, input_digest: inputs.windows.digest, output_digest: expected.digest, output_size: expected.size, files })}\n`, { mode: 0o600 });
+  await rm(work, { recursive: true, force: true });
+  return out;
+}
+
 // Assemble: combine the signed images with the other platforms' installers.
 
 export async function assemble({ env = process.env } = {}) {
   const staged = env.IRIS_STAGED_DIR;
   const signed = env.INPUT_SIGNED_DIR;
+  const signedWindows = env.INPUT_SIGNED_WINDOWS_DIR;
   const version = env.INPUT_VERSION;
-  if (!staged || !signed || !VERSION.test(version ?? '')) throw new PublishError('INVALID_INPUT');
-  const othersExpected = [`IRIS-${version}-win-x64.exe`, `IRIS-${version}-linux-x86_64.AppImage`, `IRIS-${version}-linux-arm64.AppImage`, 'latest.yml', 'latest-linux.yml', 'latest-linux-arm64.yml'].sort();
+  if (!staged || !signed || !signedWindows || !VERSION.test(version ?? '') || !UUID.test(env.INPUT_WINDOWS_REQUEST_ID ?? '')
+    || !ARCHIVE_DIGEST.test(env.INPUT_WINDOWS_INPUT_DIGEST ?? '')) throw new PublishError('INVALID_INPUT');
+  const othersExpected = [`IRIS-${version}-linux-x86_64.AppImage`, `IRIS-${version}-linux-arm64.AppImage`, 'latest-linux.yml', 'latest-linux-arm64.yml'].sort();
   const dmgs = ARCHES.map((arch) => `IRIS-${version}-mac-${arch}.dmg`);
   const sameSet = async (dir, expected) => {
     const names = (await readdir(dir).catch(() => null))?.sort();
@@ -498,13 +583,42 @@ export async function assemble({ env = process.env } = {}) {
     const { hash, size } = await hashFile(target, 'sha256');
     if (size !== file.size || hash.digest('hex') !== file.sha256) throw new PublishError('STAGED_SET_INVALID');
   }
-  for (const name of ['latest.yml', 'latest-linux.yml', 'latest-linux-arm64.yml']) {
+  for (const name of ['latest-linux.yml', 'latest-linux-arm64.yml']) {
     const text = await readFile(path.join(staged, name), 'utf8');
     const named = /^version:\s*['"]?([^'"\s]+)['"]?\s*$/m.exec(text)?.[1];
     if (named !== version) throw new PublishError('STAGED_SET_INVALID');
   }
+  const windowsNames = [`IRIS-${version}-win-x64.exe`, `IRIS-${version}-win-x64.exe.blockmap`, `IRIS-${version}-win-x64-portable.exe`, 'latest.yml', 'verification.json', 'windows-signed.json'];
+  if (!await sameSet(signedWindows, windowsNames)) throw new PublishError('STAGED_SET_INVALID');
+  let windowsManifest;
+  let windowsReport;
+  let windowsYml;
+  try {
+    windowsManifest = JSON.parse(await readFile(path.join(signedWindows, 'windows-signed.json'), 'utf8'));
+    windowsReport = JSON.parse(await readFile(path.join(signedWindows, 'verification.json'), 'utf8'));
+    windowsYml = await readFile(path.join(signedWindows, 'latest.yml'), 'utf8');
+  } catch { throw new PublishError('STAGED_SET_INVALID'); }
+  if (windowsManifest.version !== version || windowsManifest.request_id !== env.INPUT_WINDOWS_REQUEST_ID
+    || windowsManifest.input_digest !== env.INPUT_WINDOWS_INPUT_DIGEST || windowsReport.request_id !== windowsManifest.request_id
+    || windowsReport.input_digest !== windowsManifest.input_digest || windowsReport.nested_signatures_verified !== true
+    || !windowsYml.startsWith(`version: ${version}\n`) || !/^path:\s*IRIS-[^\n]+-win-x64\.exe\s*$/m.test(windowsYml)) throw new PublishError('STAGED_SET_INVALID');
+  const winEntries = Array.isArray(windowsManifest.files) ? windowsManifest.files : [];
+  if (winEntries.length !== 2 || winEntries.map((file) => file.name).sort().join() !== [`IRIS-${version}-win-x64-portable.exe`, `IRIS-${version}-win-x64.exe`].sort().join()) throw new PublishError('STAGED_SET_INVALID');
+  const installerEntry = winEntries.find((file) => file.name === `IRIS-${version}-win-x64.exe`);
+  for (const file of winEntries) {
+    const target = path.join(signedWindows, file.name);
+    const actual = await hashFile(target, 'sha256');
+    const actualSha256 = actual.hash.digest('hex');
+    const sha512 = await hashFile(target, 'sha512');
+    if (actual.size !== file.size || actualSha256 !== file.sha256 || sha512.hash.digest('base64') !== file.sha512) throw new PublishError('STAGED_SET_INVALID');
+  }
+  const blockmap = await lstat(path.join(signedWindows, `IRIS-${version}-win-x64.exe.blockmap`)).catch(() => null);
+  if (!blockmap?.isFile() || blockmap.size < 1 || windowsManifest.blockmap?.name !== `IRIS-${version}-win-x64.exe.blockmap` || windowsManifest.blockmap.size !== blockmap.size
+    || !windowsYml.includes(`    sha512: ${installerEntry.sha512}\n`) || !windowsYml.includes(`    size: ${installerEntry.size}\n`)) throw new PublishError('STAGED_SET_INVALID');
   for (const name of [...dmgs, 'latest-mac.yml']) await copyFile(path.join(signed, name), path.join(staged, name));
-  if (!await sameSet(staged, [...othersExpected, ...dmgs, 'latest-mac.yml'])) throw new PublishError('STAGED_SET_INVALID');
+  const windowsAssets = [`IRIS-${version}-win-x64.exe`, `IRIS-${version}-win-x64.exe.blockmap`, `IRIS-${version}-win-x64-portable.exe`, 'latest.yml'];
+  for (const name of windowsAssets) await copyFile(path.join(signedWindows, name), path.join(staged, name));
+  if (!await sameSet(staged, [...othersExpected, ...dmgs, 'latest-mac.yml', ...windowsAssets])) throw new PublishError('STAGED_SET_INVALID');
 }
 
 // Preflight: has this release already reached the license service?
@@ -606,7 +720,7 @@ export async function main(args = process.argv.slice(2), deps = {}) {
   const stderr = deps.stderr ?? process.stderr;
   try {
     const [command, flag] = args;
-    if (!['gate', 'resolve', 'context', 'check', 'fetch', 'assemble', 'preflight', 'cleanup-artifacts'].includes(command)
+    if (!['gate', 'resolve', 'context', 'check', 'fetch', 'fetch-windows', 'assemble', 'preflight', 'cleanup-artifacts'].includes(command)
       || args.length > 2 || (flag !== undefined && !(command === 'context' && flag === '--public'))) throw new PublishError('INVALID_COMMAND');
     const injected = { env, fetchImpl: deps.fetchImpl, sleep: deps.sleep, now: deps.now, exec: deps.exec, log: deps.log };
     const defined = Object.fromEntries(Object.entries(injected).filter(([, value]) => value !== undefined));
@@ -615,6 +729,7 @@ export async function main(args = process.argv.slice(2), deps = {}) {
     else if (command === 'context') await writeOutputs(env, contextOutputs(await readContext({ env }), { pub: flag === '--public', sealKey: env.IRIS_CONTEXT_SEAL_KEY }));
     else if (command === 'check') await writeOutputs(env, { ready: await checkSigning(defined) });
     else if (command === 'fetch') await writeOutputs(env, { dir: await fetchSigned(defined) });
+    else if (command === 'fetch-windows') await writeOutputs(env, { dir: await fetchWindowsSigned(defined) });
     else if (command === 'assemble') await assemble({ env });
     else if (command === 'preflight') await writeOutputs(env, { already: (await preflight(defined)).already });
     else await cleanupArtifacts(defined);

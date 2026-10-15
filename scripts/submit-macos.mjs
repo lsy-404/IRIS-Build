@@ -352,8 +352,9 @@ const PATTERNS = Object.freeze({
   release_id: /^[A-Za-z0-9_-]{43}$/,
   sealed_envelope: /^[A-Za-z0-9_-]{1,8192}$/,
 });
-const CONTEXT_KEYS = ['schema_version', 'build_run_id', ...Object.keys(PATTERNS), 'macos'];
+const CONTEXT_KEYS = ['schema_version', 'build_run_id', ...Object.keys(PATTERNS), 'macos', 'windows'];
 const MACOS_KEYS = ['project_id', 'request_id', 'input_digest', 'input_size'];
+const WINDOWS_PROJECT = 'iris-shell-windows-x64';
 
 function exactKeys(value, keys) {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
@@ -378,9 +379,15 @@ export function validateContext(value) {
     macos[arch] = { project_id: entry.project_id, request_id: entry.request_id, input_digest: entry.input_digest, input_size: entry.input_size };
   }
   if (macos.arm64.request_id === macos.x64.request_id) throw new ContextError();
+  const windowsEntry = value.windows;
+  if (!exactKeys(windowsEntry, MACOS_KEYS) || windowsEntry.project_id !== WINDOWS_PROJECT || typeof windowsEntry.request_id !== 'string' || !UUID.test(windowsEntry.request_id)
+    || typeof windowsEntry.input_digest !== 'string' || !/^sha256:[a-f0-9]{64}$/.test(windowsEntry.input_digest)
+    || !Number.isSafeInteger(windowsEntry.input_size) || windowsEntry.input_size < 1
+    || windowsEntry.request_id === macos.arm64.request_id || windowsEntry.request_id === macos.x64.request_id) throw new ContextError();
   const canonical = { schema_version: 1, build_run_id: value.build_run_id };
   for (const key of Object.keys(PATTERNS)) canonical[key] = value[key];
   canonical.macos = macos;
+  canonical.windows = { project_id: windowsEntry.project_id, request_id: windowsEntry.request_id, input_digest: windowsEntry.input_digest, input_size: windowsEntry.input_size };
   return canonical;
 }
 
@@ -429,6 +436,12 @@ export function buildContext(env = process.env) {
   if (!/^[A-Za-z0-9_-]{1,4096}$/.test(envelope ?? '')) throw new ContextError();
   candidate.sealed_envelope = 'x';
   candidate.macos = { arm64: arch('arm64'), x64: arch('x64') };
+  candidate.windows = {
+    project_id: WINDOWS_PROJECT,
+    request_id: env.INPUT_WINDOWS_REQUEST_ID,
+    input_digest: env.INPUT_WINDOWS_INPUT_DIGEST,
+    input_size: size(env.INPUT_WINDOWS_INPUT_SIZE),
+  };
   const canonical = validateContext(candidate);
   canonical.sealed_envelope = sealEnvelope(env.IRIS_CONTEXT_SEAL_KEY, canonical, envelope);
   return validateContext(canonical);

@@ -54,10 +54,13 @@ ruby -r yaml -e '
 
   shell_build = jobs.fetch("shell-build")
   matrix = shell_build.fetch("strategy").fetch("matrix").fetch("include")
-  raise "shell matrix must hold the unsigned-free platforms" unless matrix.map { |entry| entry.fetch("os") }.sort == %w[ubuntu-latest windows-latest]
+  raise "shell matrix must hold Linux only" unless matrix.map { |entry| entry.fetch("os") } == %w[ubuntu-latest]
   installer = steps(shell_build).find { |step| step["name"] == "Build installer" }
   raise "shell installer build is missing" unless installer
   raise "installer must decrypt release key" unless installer.fetch("run").include?("decrypt-key")
+  windows_source = jobs.fetch("shell-build-windows")
+  raise "Windows source job must be required by macOS handoff" unless jobs.fetch("shell-build-macos").fetch("needs").include?("shell-build-windows")
+  raise "Windows source job must submit to the signing center" unless steps(windows_source).any? { |step| step.fetch("run", "").include?("submit-windows.mjs submit") }
   shell_build_macos = jobs.fetch("shell-build-macos")
   macos_installer = steps(shell_build_macos).find { |step| step["name"] == "Build installer" }
   raise "macOS installer build is missing" unless macos_installer
@@ -71,12 +74,13 @@ ruby -r yaml -e '
   end
 
   raise "core release tag is missing" unless steps(core).any? { |step| step["name"] == "Tag published core source" && step.fetch("run").include?("tag-build-commit.sh") }
-  raise "publish must require resolve and verify-macos" unless publish.fetch("needs") == ["resolve", "verify-macos"]
+  raise "publish must require both platform verifiers" unless publish.fetch("needs") == ["resolve", "verify-macos", "verify-windows"]
   release_run = steps(publish).find { |step| step["name"] == "Mirror GitHub Release" }.fetch("run")
   raise "release must verify immutable asset state" unless release_run.include?("state != \"uploaded\"")
 
   [core, shell_check, shell_build, shell_build_macos, publish].each do |job|
     raise "secrets cleanup is missing" unless steps(job).any? { |step| step["name"].to_s.start_with?("Wipe") && step.fetch("run", "").include?("rm -rf") }
   end
+  raise "Windows source cleanup is missing" unless steps(windows_source).any? { |step| step["name"] == "Wipe Windows source build" && step.fetch("run", "").include?("Remove-Item") }
   puts "retired PRO dependencies are absent and release gates remain protected"
 ' "$workflow" "$publish_workflow"

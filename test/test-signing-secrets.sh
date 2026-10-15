@@ -20,10 +20,15 @@ ruby -r yaml -e '
   raise "build workflow must not publish a shell release" if jobs.key?("shell-release")
 
   macos = jobs.fetch("shell-build-macos")
-  raise "macOS build must require shell-check and shell-build" unless macos.fetch("needs") == ["shell-check", "shell-build"]
+  raise "macOS signing handoff must require Windows source submission" unless macos.fetch("needs").sort == %w[shell-build shell-build-windows shell-check]
   macos_installer = macos.fetch("steps").find { |step| step["name"] == "Build installer" }
   raise "missing macOS installer build" unless macos_installer
   raise "macOS installer build configures code signing" if macos_installer.fetch("env").keys.any? { |key| key.start_with?("IRIS_SIGNING") || key.start_with?("CSC_") }
+
+  windows_source = jobs.fetch("shell-build-windows")
+  windows_installer = windows_source.fetch("steps").find { |step| step["name"] == "Build unpacked Windows app" }
+  raise "missing unpacked Windows build" unless windows_installer
+  raise "Windows source build configures code signing" if windows_installer.fetch("env").keys.any? { |key| key.start_with?("IRIS_SIGNING") || key.start_with?("CSC_") }
 ' "$workflow"
 
 echo 'installer builds hold no signing material'

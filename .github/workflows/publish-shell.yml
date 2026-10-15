@@ -45,6 +45,9 @@ jobs:
       arm64_input_digest: ${{ steps.ctx.outputs.arm64_input_digest }}
       x64_request_id: ${{ steps.ctx.outputs.x64_request_id }}
       x64_input_digest: ${{ steps.ctx.outputs.x64_input_digest }}
+      windows_request_id: ${{ steps.ctx.outputs.windows_request_id }}
+      windows_input_digest: ${{ steps.ctx.outputs.windows_input_digest }}
+      windows_input_size: ${{ steps.ctx.outputs.windows_input_size }}
     steps:
       - name: Reject workflow reruns
         if: ${{ github.run_attempt != 1 }}
@@ -115,6 +118,9 @@ jobs:
           INPUT_ARM64_INPUT_DIGEST: ${{ needs.resolve.outputs.arm64_input_digest }}
           INPUT_X64_REQUEST_ID: ${{ needs.resolve.outputs.x64_request_id }}
           INPUT_X64_INPUT_DIGEST: ${{ needs.resolve.outputs.x64_input_digest }}
+          INPUT_WINDOWS_REQUEST_ID: ${{ needs.resolve.outputs.windows_request_id }}
+          INPUT_WINDOWS_INPUT_DIGEST: ${{ needs.resolve.outputs.windows_input_digest }}
+          INPUT_WINDOWS_INPUT_SIZE: ${{ needs.resolve.outputs.windows_input_size }}
         run: node .release-tools/scripts/publish-shell.mjs check
 
   verify-macos:
@@ -149,6 +155,9 @@ jobs:
           INPUT_ARM64_INPUT_DIGEST: ${{ needs.resolve.outputs.arm64_input_digest }}
           INPUT_X64_REQUEST_ID: ${{ needs.resolve.outputs.x64_request_id }}
           INPUT_X64_INPUT_DIGEST: ${{ needs.resolve.outputs.x64_input_digest }}
+          INPUT_WINDOWS_REQUEST_ID: ${{ needs.resolve.outputs.windows_request_id }}
+          INPUT_WINDOWS_INPUT_DIGEST: ${{ needs.resolve.outputs.windows_input_digest }}
+          INPUT_WINDOWS_INPUT_SIZE: ${{ needs.resolve.outputs.windows_input_size }}
         run: node .release-tools/scripts/publish-shell.mjs fetch
       - name: Hand the signed images to the publish job
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -161,8 +170,115 @@ jobs:
         if: always()
         run: rm -rf "$RUNNER_TEMP/iris-signed-$GITHUB_RUN_ID" "$RUNNER_TEMP/signed-macos"
 
+  fetch-windows:
+    needs: [resolve, signing-readiness]
+    if: needs.signing-readiness.outputs.ready == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    steps:
+      - name: Reject workflow reruns
+        if: ${{ github.run_attempt != 1 }}
+        run: exit 1
+      - name: Checkout release tools
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: ${{ github.sha }}
+          path: .release-tools
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - name: Fetch and verify signed Windows archive
+        id: fetch
+        env:
+          SIGNING_API_KEY: ${{ secrets.SIGNING_API_KEY }}
+          INPUT_BUILD_RUN_ID: ${{ env.BUILD_RUN_ID }}
+          INPUT_VERSION: ${{ needs.resolve.outputs.shell_version }}
+          INPUT_SOURCE_SHA: ${{ needs.resolve.outputs.source_sha }}
+          INPUT_WINDOWS_REQUEST_ID: ${{ needs.resolve.outputs.windows_request_id }}
+          INPUT_WINDOWS_INPUT_DIGEST: ${{ needs.resolve.outputs.windows_input_digest }}
+          INPUT_WINDOWS_INPUT_SIZE: ${{ needs.resolve.outputs.windows_input_size }}
+        run: node .release-tools/scripts/publish-shell.mjs fetch-windows
+      - name: Hand signed Windows installers to native verification
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: signed-windows
+          path: ${{ steps.fetch.outputs.dir }}
+          if-no-files-found: error
+          retention-days: 1
+      - name: Wipe signed workspace
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/iris-windows-signed-$GITHUB_RUN_ID" "$RUNNER_TEMP/signed-windows"
+
+  verify-windows:
+    needs: [resolve, signing-readiness, fetch-windows]
+    if: needs.signing-readiness.outputs.ready == 'true'
+    runs-on: windows-latest
+    timeout-minutes: 30
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - name: Reject workflow reruns
+        if: ${{ github.run_attempt != 1 }}
+        run: exit 1
+      - name: Checkout release tools
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: ${{ github.sha }}
+          path: .release-tools
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - name: Download signed Windows installers
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: signed-windows
+          path: ${{ runner.temp }}/signed-windows
+      - name: Download blockmap tool from source run
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: windows-blockmap-tool
+          path: ${{ runner.temp }}/blockmap-tool
+          run-id: ${{ env.BUILD_RUN_ID }}
+          github-token: ${{ github.token }}
+      - name: Generate post-signing installer metadata
+        id: finalize
+        env:
+          INPUT_SIGNED_WINDOWS_DIR: ${{ runner.temp }}/signed-windows
+          INPUT_VERSION: ${{ needs.resolve.outputs.shell_version }}
+          INPUT_APP_BUILDER: ${{ runner.temp }}/blockmap-tool/app-builder.exe
+        shell: pwsh
+        run: node .release-tools/scripts/finalize-windows.mjs
+      - name: Verify Authenticode, timestamp, and publisher identity
+        env:
+          IRIS_WINDOWS_SIGNED_DIR: ${{ steps.finalize.outputs.verified_dir }}
+          IRIS_INPUT_VERSION: ${{ needs.resolve.outputs.shell_version }}
+          IRIS_INPUT_WINDOWS_REQUEST_ID: ${{ needs.resolve.outputs.windows_request_id }}
+          IRIS_INPUT_WINDOWS_INPUT_DIGEST: ${{ needs.resolve.outputs.windows_input_digest }}
+        shell: pwsh
+        run: pwsh -NoProfile -File .release-tools/scripts/verify-windows-signatures.ps1
+      - name: Hand verified Windows release assets to publish
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: verified-windows
+          path: ${{ runner.temp }}/signed-windows
+          if-no-files-found: error
+          retention-days: 1
+      - name: Wipe Windows verification workspace
+        if: always()
+        shell: pwsh
+        run: |
+          Remove-Item -LiteralPath "$env:RUNNER_TEMP/signed-windows" -Recurse -Force -ErrorAction SilentlyContinue
+          Remove-Item -LiteralPath "$env:RUNNER_TEMP/blockmap-tool" -Recurse -Force -ErrorAction SilentlyContinue
+
   publish:
-    needs: [resolve, verify-macos]
+    needs: [resolve, verify-macos, verify-windows]
     if: vars.IRIS_SHELL_PUBLISH_HOLD != 'true' || (github.event_name == 'workflow_dispatch' && inputs.release_held)
     runs-on: ubuntu-latest
     timeout-minutes: 60
@@ -249,6 +365,11 @@ jobs:
         with:
           name: signed-macos
           path: ${{ runner.temp }}/signed-macos
+      - name: Download verified Windows installers
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: verified-windows
+          path: ${{ runner.temp }}/verified-windows
       - name: Read release context
         id: ctx
         env:
@@ -260,7 +381,10 @@ jobs:
         env:
           IRIS_STAGED_DIR: staged-installers
           INPUT_SIGNED_DIR: ${{ runner.temp }}/signed-macos
+          INPUT_SIGNED_WINDOWS_DIR: ${{ runner.temp }}/verified-windows
           INPUT_VERSION: ${{ steps.ctx.outputs.shell_version }}
+          INPUT_WINDOWS_REQUEST_ID: ${{ steps.ctx.outputs.windows_request_id }}
+          INPUT_WINDOWS_INPUT_DIGEST: ${{ steps.ctx.outputs.windows_input_digest }}
         run: node .release-tools/scripts/publish-shell.mjs assemble
       - name: Check what is already published
         id: pre
@@ -323,4 +447,4 @@ jobs:
         run: node .release-tools/scripts/publish-shell.mjs cleanup-artifacts
       - name: Wipe shell-release workspace
         if: always()
-        run: rm -rf "$RUNNER_TEMP/iris-release-key" "$RUNNER_TEMP/iris-release-envelope" "$RUNNER_TEMP/iris-signing.p12" "$RUNNER_TEMP/shell-release-context" "$RUNNER_TEMP/signed-macos" iris-source tag-source staged-installers release-assets build
+        run: rm -rf "$RUNNER_TEMP/iris-release-key" "$RUNNER_TEMP/iris-release-envelope" "$RUNNER_TEMP/iris-signing.p12" "$RUNNER_TEMP/shell-release-context" "$RUNNER_TEMP/signed-macos" "$RUNNER_TEMP/verified-windows" iris-source tag-source staged-installers release-assets build

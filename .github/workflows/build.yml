@@ -383,8 +383,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: windows-latest
-            dist_cmd: pnpm run dist:win --publish never
           - os: ubuntu-latest
             dist_cmd: pnpm run dist:linux --publish never
     runs-on: ${{ matrix.os }}
@@ -457,8 +455,123 @@ jobs:
         if: always()
         run: rm -rf "$RUNNER_TEMP/iris-release-key" "$RUNNER_TEMP/iris-release-envelope" iris-source staged-installers build
 
+  shell-build-windows:
+    needs: [shell-check]
+    runs-on: windows-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    outputs:
+      request_id: ${{ steps.submit.outputs.request_id }}
+      input_digest: ${{ steps.submit.outputs.input_digest }}
+      input_size: ${{ steps.submit.outputs.input_size }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          repository: lsy-404/IRIS
+          ref: ${{ needs.shell-check.outputs.source_sha }}
+          path: iris-source
+          ssh-key: ${{ secrets.IRIS_BUILD_DEPLOY_KEY }}
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Use source scripts
+        shell: bash
+        run: |
+          shopt -s dotglob nullglob
+          for entry in iris-source/*; do
+            [[ "$entry" == "iris-source/.git" ]] && continue
+            cp -R "$entry" ./
+          done
+      - name: Checkout release tools
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: ${{ github.sha }}
+          path: .release-tools
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - name: Install pnpm
+        shell: bash
+        run: |
+          npm install --global --force corepack@0.34.1
+          corepack enable pnpm
+          corepack prepare pnpm@10.34.6 --activate
+      - name: Download verified notification readers
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          pattern: notification-reader-*
+          path: build/native/notification-reader/incoming
+      - name: Build unpacked Windows app
+        env:
+          npm_config_node_gyp: ${{ github.workspace }}/node_modules/node-gyp/bin/node-gyp.js
+          IRIS_SHELL_VERSION: ${{ needs.shell-check.outputs.shell_version }}
+          IRIS_RELEASE_KEY_TRANSFER_KEY: ${{ secrets.IRIS_RELEASE_KEY_TRANSFER_KEY }}
+          IRIS_RELEASE_KEY_ENVELOPE: ${{ needs.shell-check.outputs.release_envelope }}
+          IRIS_RELEASE_ID: ${{ needs.shell-check.outputs.release_id }}
+          IRIS_CORE_BUILD: ${{ needs.shell-check.outputs.core_build }}
+          IRIS_CORE_VERSION: ${{ needs.shell-check.outputs.core_version }}
+          IRIS_INTERNAL_VERSION: ${{ needs.shell-check.outputs.internal_version }}
+          IRIS_LICENSE_BUILD_API_ORIGIN: https://iris.voidcarve.com
+          IRIS_RELEASE_UPLOAD_TOKEN: ${{ secrets.IRIS_RELEASE_UPLOAD_TOKEN }}
+          DIST_CMD: pnpm run build:native:notification-reader && pnpm run build && pnpm run prune:links && pnpm exec electron-builder -c electron-builder.config.cjs --win --x64 --dir
+          EP_PREPACKAGED: ''
+          NODE_OPTIONS: --max-old-space-size=4096
+          WORKFLOW_REPORT_TOKEN: ${{ secrets.IRIS_RELEASE_UPLOAD_TOKEN }}
+          IRIS_NOTIFICATION_READER_ASSET_DIRS_JSON: >-
+            ["build/native/notification-reader/incoming/notification-reader-macos","build/native/notification-reader/incoming/notification-reader-windows","build/native/notification-reader/incoming/notification-reader-linux-x64","build/native/notification-reader/incoming/notification-reader-linux-arm64"]
+        shell: bash
+        run: |
+          node .github/scripts/run-quiet.mjs -- bash .github/scripts/release-step.sh apply-version
+          node .github/scripts/run-quiet.mjs -- bash .github/scripts/release-step.sh install
+          node .github/scripts/run-quiet.mjs -- bash .github/scripts/release-step.sh decrypt-key
+          node .github/scripts/run-quiet.mjs -- bash .github/scripts/release-step.sh build
+      - name: Prepare Windows signing source
+        id: prepare
+        env:
+          INPUT_VERSION: ${{ needs.shell-check.outputs.shell_version }}
+          INPUT_SOURCE_SHA: ${{ needs.shell-check.outputs.source_sha }}
+        shell: bash
+        run: node .release-tools/scripts/submit-windows.mjs prepare
+      - name: Submit Windows source for signing
+        id: submit
+        env:
+          SIGNING_API_KEY: ${{ secrets.SIGNING_API_KEY }}
+          INPUT_WORK_DIR: ${{ steps.prepare.outputs.work_dir }}
+          INPUT_VERSION: ${{ needs.shell-check.outputs.shell_version }}
+          INPUT_SOURCE_SHA: ${{ needs.shell-check.outputs.source_sha }}
+        shell: bash
+        run: node .release-tools/scripts/submit-windows.mjs submit
+      - name: Stage electron-builder blockmap tool
+        shell: pwsh
+        run: |
+          $tool = Get-ChildItem node_modules/.pnpm -Directory | Where-Object { $_.Name -like 'app-builder-bin@*' } | ForEach-Object { Join-Path $_.FullName 'node_modules/app-builder-bin/win/x64/app-builder.exe' } | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+          if (-not $tool) { throw 'app-builder binary is unavailable' }
+          New-Item -ItemType Directory -Path "$env:RUNNER_TEMP/blockmap-tool" | Out-Null
+          Copy-Item -LiteralPath $tool -Destination "$env:RUNNER_TEMP/blockmap-tool/app-builder.exe"
+      - name: Retain blockmap tool for signed installer metadata
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: windows-blockmap-tool
+          path: ${{ runner.temp }}/blockmap-tool/app-builder.exe
+          if-no-files-found: error
+          retention-days: 3
+      - name: Wipe Windows source build
+        if: always()
+        shell: pwsh
+        run: |
+          Get-ChildItem -LiteralPath $env:RUNNER_TEMP -Directory -Filter "iris-shell-windows-$env:GITHUB_RUN_ID-*" -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force
+          Remove-Item -LiteralPath "$env:RUNNER_TEMP/blockmap-tool" -Recurse -Force -ErrorAction SilentlyContinue
+          Remove-Item -LiteralPath "$env:RUNNER_TEMP/iris-release-key" -Force -ErrorAction SilentlyContinue
+          Remove-Item -LiteralPath "$env:RUNNER_TEMP/iris-release-envelope" -Force -ErrorAction SilentlyContinue
+          Get-ChildItem -LiteralPath $env:GITHUB_WORKSPACE -Force | Remove-Item -Recurse -Force
+
   shell-build-macos:
-    needs: [shell-check, shell-build]
+    needs: [shell-check, shell-build, shell-build-windows]
     runs-on: macos-latest
     timeout-minutes: 90
     permissions:
@@ -569,6 +682,9 @@ jobs:
           INPUT_X64_REQUEST_ID: ${{ steps.x64.outputs.request_id }}
           INPUT_X64_INPUT_DIGEST: ${{ steps.x64.outputs.input_digest }}
           INPUT_X64_INPUT_SIZE: ${{ steps.x64.outputs.input_size }}
+          INPUT_WINDOWS_REQUEST_ID: ${{ needs.shell-build-windows.outputs.request_id }}
+          INPUT_WINDOWS_INPUT_DIGEST: ${{ needs.shell-build-windows.outputs.input_digest }}
+          INPUT_WINDOWS_INPUT_SIZE: ${{ needs.shell-build-windows.outputs.input_size }}
         run: node .release-tools/scripts/submit-macos.mjs context
       - name: Hand the release to the publish workflow
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02

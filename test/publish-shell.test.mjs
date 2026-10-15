@@ -14,8 +14,8 @@ const SHA = 'a5237f77558b8e32886ba4ea0cca90c8c416520c';
 const VERSION = '0.5.84';
 const BUILD_RUN = '900';
 const SEAL_KEY = 'k'.repeat(40);
-const ID = { arm64: '3f2b8c1e-0a4d-4e8b-9c55-1d2e3f4a5b6c', x64: '4a2b8c1e-0a4d-4e8b-9c55-1d2e3f4a5b6d' };
-const INPUT_DIGEST = { arm64: `sha256:${'c'.repeat(64)}`, x64: `sha256:${'d'.repeat(64)}` };
+const ID = { arm64: '3f2b8c1e-0a4d-4e8b-9c55-1d2e3f4a5b6c', x64: '4a2b8c1e-0a4d-4e8b-9c55-1d2e3f4a5b6d', windows: '5b2b8c1e-0a4d-4e8b-9c55-1d2e3f4a5b6e' };
+const INPUT_DIGEST = { arm64: `sha256:${'c'.repeat(64)}`, x64: `sha256:${'d'.repeat(64)}`, windows: `sha256:${'e'.repeat(64)}` };
 const sha256 = (bytes) => createHash('sha256').update(bytes).digest('hex');
 
 const json = (status, value, headers = {}) => new Response(JSON.stringify(value), { status, headers: { 'content-type': 'application/json', ...headers } });
@@ -168,6 +168,7 @@ const CONTEXT_ENV = {
   INPUT_SHELL_FINGERPRINT: 'b'.repeat(64), INPUT_RELEASE_ID: 'A'.repeat(43), INPUT_RELEASE_ENVELOPE: 'eyJ2IjoxfQ', IRIS_CONTEXT_SEAL_KEY: SEAL_KEY,
   INPUT_ARM64_REQUEST_ID: ID.arm64, INPUT_ARM64_INPUT_DIGEST: INPUT_DIGEST.arm64, INPUT_ARM64_INPUT_SIZE: '1234',
   INPUT_X64_REQUEST_ID: ID.x64, INPUT_X64_INPUT_DIGEST: INPUT_DIGEST.x64, INPUT_X64_INPUT_SIZE: '5678',
+  INPUT_WINDOWS_REQUEST_ID: ID.windows, INPUT_WINDOWS_INPUT_DIGEST: INPUT_DIGEST.windows, INPUT_WINDOWS_INPUT_SIZE: '9012',
 };
 
 async function contextFile(mutate) {
@@ -223,10 +224,11 @@ test('context cannot be read without the seal key and the file never holds the p
 const awaitEnv = () => ({
   SIGNING_API_KEY: 'key', INPUT_BUILD_RUN_ID: BUILD_RUN, INPUT_VERSION: VERSION, INPUT_SOURCE_SHA: SHA,
   INPUT_ARM64_REQUEST_ID: ID.arm64, INPUT_ARM64_INPUT_DIGEST: INPUT_DIGEST.arm64, INPUT_X64_REQUEST_ID: ID.x64, INPUT_X64_INPUT_DIGEST: INPUT_DIGEST.x64,
+  INPUT_WINDOWS_REQUEST_ID: ID.windows, INPUT_WINDOWS_INPUT_DIGEST: INPUT_DIGEST.windows, INPUT_WINDOWS_INPUT_SIZE: '9012',
 });
 
 const statusBody = (arch, extra = {}) => ({
-  request_id: ID[arch], project_id: `iris-shell-${arch}`, state: 'queued', platform: 'macos', version: VERSION, source_run_id: Number(BUILD_RUN),
+  request_id: ID[arch], project_id: arch === 'windows' ? 'iris-shell-windows-x64' : `iris-shell-${arch}`, state: 'queued', platform: arch === 'windows' ? 'windows' : 'macos', version: VERSION, source_run_id: Number(BUILD_RUN),
   source_sha: SHA, input_digest: INPUT_DIGEST[arch], retry_after_seconds: 30, error: null, output: null, ...extra,
 });
 
@@ -240,7 +242,7 @@ function centerStatus(script) {
     assert.equal(options.headers.authorization, 'Bearer key');
     const arch = Object.keys(ID).find((name) => ID[name] === match[1]);
     calls.push(arch);
-    const queue = script[arch];
+    const queue = script[arch] ?? [SUCCEEDED('windows')];
     const step = queue.length > 1 ? queue.shift() : queue[0];
     if (step instanceof Error) throw step;
     if (typeof step === 'number') return new Response(null, { status: step });
@@ -253,7 +255,7 @@ test('signing readiness returns pending after one inspection instead of holding 
   const { state, now, sleep } = clock();
   const center = centerStatus({ arm64: [statusBody('arm64'), SUCCEEDED('arm64')], x64: [SUCCEEDED('x64')] });
   assert.equal(await checkSigning({ env: awaitEnv(), fetchImpl: center.fetchImpl, sleep, now, log() {} }), false);
-  assert.deepEqual(center.calls, ['arm64', 'x64']);
+  assert.deepEqual(center.calls, ['arm64', 'x64', 'windows']);
   assert.deepEqual(state.sleeps, []);
 });
 
@@ -628,11 +630,13 @@ async function assembleFixture(mutate) {
   const root = await temp();
   const staged = path.join(root, 'staged');
   const signed = path.join(root, 'signed');
+  const signedWindows = path.join(root, 'signed-windows');
   await mkdir(staged);
   await mkdir(signed);
+  await mkdir(signedWindows);
   const others = {
-    [`IRIS-${VERSION}-win-x64.exe`]: 'win', [`IRIS-${VERSION}-linux-x86_64.AppImage`]: 'lx', [`IRIS-${VERSION}-linux-arm64.AppImage`]: 'la',
-    'latest.yml': `version: ${VERSION}\n`, 'latest-linux.yml': `version: ${VERSION}\n`, 'latest-linux-arm64.yml': `version: ${VERSION}\n`,
+    [`IRIS-${VERSION}-linux-x86_64.AppImage`]: 'lx', [`IRIS-${VERSION}-linux-arm64.AppImage`]: 'la',
+    'latest-linux.yml': `version: ${VERSION}\n`, 'latest-linux-arm64.yml': `version: ${VERSION}\n`,
   };
   for (const [name, text] of Object.entries(others)) await writeFile(path.join(staged, name), text);
   const files = [];
@@ -644,16 +648,31 @@ async function assembleFixture(mutate) {
   }
   await writeFile(path.join(signed, 'latest-mac.yml'), 'version: x\n');
   await writeFile(path.join(signed, 'signed-macos.json'), JSON.stringify({ version: VERSION, files }));
-  if (mutate) await mutate({ staged, signed, files });
-  return { env: { IRIS_STAGED_DIR: staged, INPUT_SIGNED_DIR: signed, INPUT_VERSION: VERSION }, staged, signed };
+  const windowsFiles = [];
+  for (const name of [`IRIS-${VERSION}-win-x64.exe`, `IRIS-${VERSION}-win-x64-portable.exe`]) {
+    const bytes = Buffer.from(name);
+    await writeFile(path.join(signedWindows, name), bytes);
+    windowsFiles.push({ name, size: bytes.length, sha256: sha256(bytes), sha512: createHash('sha512').update(bytes).digest('base64') });
+  }
+  const mapName = `IRIS-${VERSION}-win-x64.exe.blockmap`;
+  await writeFile(path.join(signedWindows, mapName), 'map');
+  const installer = windowsFiles.find((file) => file.name.endsWith('win-x64.exe'));
+  await writeFile(path.join(signedWindows, 'latest.yml'), `version: ${VERSION}\nfiles:\n  - url: ${installer.name}\n    sha512: ${installer.sha512}\n    size: ${installer.size}\npath: ${installer.name}\nsha512: ${installer.sha512}\nreleaseDate: '2026-10-10T12:00:00.000Z'\n`);
+  await writeFile(path.join(signedWindows, 'verification.json'), JSON.stringify({ request_id: ID.windows, input_digest: INPUT_DIGEST.windows, nested_signatures_verified: true }));
+  await writeFile(path.join(signedWindows, 'windows-signed.json'), JSON.stringify({ version: VERSION, request_id: ID.windows, input_digest: INPUT_DIGEST.windows,
+    files: windowsFiles, blockmap: { name: mapName, size: 3 } }));
+  if (mutate) await mutate({ staged, signed, signedWindows, files });
+  return { env: { IRIS_STAGED_DIR: staged, INPUT_SIGNED_DIR: signed, INPUT_SIGNED_WINDOWS_DIR: signedWindows, INPUT_VERSION: VERSION,
+    INPUT_WINDOWS_REQUEST_ID: ID.windows, INPUT_WINDOWS_INPUT_DIGEST: INPUT_DIGEST.windows }, staged, signed, signedWindows };
 }
 
-test('assemble copies the signed images into the exact nine-file set', async () => {
+test('assemble copies signed Mac and Windows installers into the exact release set', async () => {
   const { env, staged } = await assembleFixture();
   await assemble({ env });
   assert.deepEqual((await readdir(staged)).sort(), [
     `IRIS-${VERSION}-linux-arm64.AppImage`, `IRIS-${VERSION}-linux-x86_64.AppImage`, `IRIS-${VERSION}-mac-arm64.dmg`, `IRIS-${VERSION}-mac-x64.dmg`,
-    `IRIS-${VERSION}-win-x64.exe`, 'latest-linux-arm64.yml', 'latest-linux.yml', 'latest-mac.yml', 'latest.yml',
+    `IRIS-${VERSION}-win-x64-portable.exe`, `IRIS-${VERSION}-win-x64.exe`, `IRIS-${VERSION}-win-x64.exe.blockmap`,
+    'latest-linux-arm64.yml', 'latest-linux.yml', 'latest-mac.yml', 'latest.yml',
   ]);
   assert.equal(await readFile(path.join(staged, `IRIS-${VERSION}-mac-x64.dmg`), 'utf8'), 'signed-x64');
 });

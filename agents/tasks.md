@@ -22,3 +22,5 @@
 | 014 | [CI] IONOS runner pool | 在现有 IONOS 主机部署通用自托管资源池并接入现有测试 CI | 用户要求较大空间和 swap，后续供多个仓库使用 | ✅ 已完成（IRIS-Build 完整 CI 通过；其他仓库后续接入） |
 
 | 015 | [CI] Self-hosted core builds | 将 core 主构建及 Linux x64 原生产物接入通用资源池 | 用户要求 core build 使用自托管 runner | ✅ 最新 main 完整 core workflow 在 #5 通过；签名及发布通过 |
+
+| 016 | [CI] Windows签名发布 | Windows x64 shell 源包交给签名中心并在原生验签后发布 | 避免向许可证服务与 Release 发布未签名 Windows 安装包 | ✅ 已完成 |

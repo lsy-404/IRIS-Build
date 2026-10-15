@@ -10,6 +10,7 @@ import { buildContext, cleanup, main, openEnvelope, prepare, submitSource, valid
 const PART = 5 * 1024 * 1024;
 const ID = '3f2b8c1e-0a4d-4e8b-9c55-1d2e3f4a5b6c';
 const ID2 = '4a2b8c1e-0a4d-4e8b-9c55-1d2e3f4a5b6d';
+const ID3 = '5b2b8c1e-0a4d-4e8b-9c55-1d2e3f4a5b6e';
 const SHA = 'a5237f77558b8e32886ba4ea0cca90c8c416520c';
 const VERSION = '1.2.3';
 const noSleep = async () => {};
@@ -369,6 +370,7 @@ const CONTEXT_ENV = {
   INPUT_SHELL_FINGERPRINT: 'b'.repeat(64), INPUT_RELEASE_ID: 'A'.repeat(43), INPUT_RELEASE_ENVELOPE: 'eyJ2IjoxfQ', IRIS_CONTEXT_SEAL_KEY: 'k'.repeat(40),
   INPUT_ARM64_REQUEST_ID: ID, INPUT_ARM64_INPUT_DIGEST: `sha256:${'c'.repeat(64)}`, INPUT_ARM64_INPUT_SIZE: '1234',
   INPUT_X64_REQUEST_ID: ID2, INPUT_X64_INPUT_DIGEST: `sha256:${'d'.repeat(64)}`, INPUT_X64_INPUT_SIZE: '5678',
+  INPUT_WINDOWS_REQUEST_ID: ID3, INPUT_WINDOWS_INPUT_DIGEST: `sha256:${'e'.repeat(64)}`, INPUT_WINDOWS_INPUT_SIZE: '9012',
 };
 
 test('buildContext builds the exact schema with the envelope sealed', () => {
@@ -380,8 +382,9 @@ test('buildContext builds the exact schema with the envelope sealed', () => {
       arm64: { project_id: 'iris-shell-arm64', request_id: ID, input_digest: `sha256:${'c'.repeat(64)}`, input_size: 1234 },
       x64: { project_id: 'iris-shell-x64', request_id: ID2, input_digest: `sha256:${'d'.repeat(64)}`, input_size: 5678 },
     },
+    windows: { project_id: 'iris-shell-windows-x64', request_id: ID3, input_digest: `sha256:${'e'.repeat(64)}`, input_size: 9012 },
   });
-  assert.deepEqual(Object.keys(buildContext(CONTEXT_ENV)), ['schema_version', 'build_run_id', 'source_sha', 'shell_version', 'internal_version', 'core_build', 'core_version', 'shell_fingerprint', 'release_id', 'sealed_envelope', 'macos']);
+  assert.deepEqual(Object.keys(buildContext(CONTEXT_ENV)), ['schema_version', 'build_run_id', 'source_sha', 'shell_version', 'internal_version', 'core_build', 'core_version', 'shell_fingerprint', 'release_id', 'sealed_envelope', 'macos', 'windows']);
   assert.equal(sealed.includes('eyJ2IjoxfQ'), false);
 });
 
