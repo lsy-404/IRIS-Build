@@ -16,3 +16,5 @@
 - 源 run 38799647399 已成功；两个 Mac 最终包由本机 Get-Sign 检查镜像内 IRIS 0.6.0 均为 PASS、DefaultPassed、Distribution Passed、VerifiedStapled。Windows 请求在授权阶段失败并耗尽重试，自动 publisher run 38806661257 明确拒绝发布 SIGNING_FAILED windows execution_did_not_complete。
 - 保留该未发布候选完整 context.json 至签名发布工作目录 retired-iris-0.6.0-second-candidate，经过既有 validateContext 校验，SHA-256 为 884dd832b21fb74c0b76d2bd06afb647212cd0c5c82de64013b062f0355d967d；仅移除它的旧 GitHub context artifact 12004975998，解除待发布 gate，不改已发布版本。
 - 使用同一已审核源 b9e3cd327c93976deb97586616545909a09093d8 和版本 0.6.0 重新提交源 run 38811075767，供修复后的固定 Windows 签名配方验收。真实新发布及更新元数据仍待完成。
+
+- Publisher 38818783792 的全部签名下载与原生验证通过，签名后 Windows blockmap / latest.yml 生成通过；发布步骤在 quiet 子命令失败。增加固定阶段提示用于区分解密、payload 上传及安装器发布，不记录任何参数或凭据；正在核对服务端实际提交状态，尚未报告发布完成。

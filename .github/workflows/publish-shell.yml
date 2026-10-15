@@ -411,8 +411,11 @@ jobs:
           WORKFLOW_REPORT_TOKEN: ${{ secrets.IRIS_RELEASE_UPLOAD_TOKEN }}
           IRIS_STAGED_DIR: staged-installers
         run: |
+          echo 'Opening release key'
           node .github/scripts/run-quiet.mjs -- bash .github/scripts/release-step.sh decrypt-key
+          echo 'Uploading core payload'
           node .github/scripts/run-quiet.mjs -- bash .github/scripts/release-step.sh upload-payload with-key
+          echo 'Publishing signed installers'
           node .github/scripts/run-quiet.mjs -- bash .github/scripts/release-step.sh publish-shell-assets
       - name: Checkout source for shell and core tags
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
